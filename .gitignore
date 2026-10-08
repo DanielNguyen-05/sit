@@ -5,3 +5,5 @@ wandb
 samples
 results
 pretrained_models
+labels.npy
+latents.npy

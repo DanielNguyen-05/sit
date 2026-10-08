@@ -1,0 +1,13 @@
+# Versions this code was tested with (CPU, Python 3.12). Install PyTorch first, from the CUDA 12.1
+# index, which matches the cluster driver (535) and still supports V100:
+#
+#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+#   pip install -r requirements.txt
+#
+timm==1.0.30
+diffusers==0.35.2     # do not use a newer release with torch 2.5: 0.41 fails at import (needs torch.accelerator)
+accelerate
+einops==0.8.2
+torchdiffeq==0.2.5
+pyarrow               # only for encode_latents.py
+# wandb               # optional: only when training with WANDB=1
