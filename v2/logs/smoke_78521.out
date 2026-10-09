@@ -1,0 +1,17 @@
+================================
+Job ID     : 78521
+Node       : gpu01
+Start time : Fri Oct  9 08:29:22 AM UTC 2026
+Run folder : /media/ltnghia33/sit/v2/results/smoke_method
+GPUs       : 1   CPUs: 8   workers/GPU: 7
+Command    : torchrun --standalone --nproc_per_node=1 train.py --data-path /media/ltnghia33/sit --results-dir /media/ltnghia33/sit/v2/results --exp-name smoke_method --model SiT-S/2 --global-batch-size 256 --max-steps 200 --num-workers 7 --amp auto --log-every 20 --ckpt-every 100 --keep-every 0 --sample-every 0 --resume none
+================================
+TRITON_LIBCUDA_PATH=/tmp/triton_libcuda_78521 -> /lib/x86_64-linux-gnu/libcuda.so.1
+/media/ltnghia33/miniconda3/envs/sit/bin/python
+torch 2.5.1+cu121 | cuda True | NVIDIA A100-SXM4-40GB
+index, name, memory.total [MiB]
+0, NVIDIA A100-SXM4-40GB, 40960 MiB
+Starting rank=0, seed=0, world_size=1.
+================================
+End time : Fri Oct  9 08:43:03 AM UTC 2026   exit code: 0
+================================

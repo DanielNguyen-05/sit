@@ -1,0 +1,20 @@
+[[34m2026-10-09 08:34:44[0m] Experiment directory: /media/ltnghia33/sit/v2/results/smoke_method
+[[34m2026-10-09 08:34:58[0m] SiT Parameters: 40,453,648 (compress=True, detailer=True, legacy_residual=False)
+[[34m2026-10-09 08:34:58[0m] Autocast dtype: torch.bfloat16 (GradScaler off)
+[[34m2026-10-09 08:34:58[0m] Using MemmapLatentDataset (uncompressed memmap).
+[[34m2026-10-09 08:34:58[0m] Dataset contains 1,281,167 images (/media/ltnghia33/sit)
+[[34m2026-10-09 08:34:58[0m] Training for 1400 epochs or 200 steps...
+[[34m2026-10-09 08:34:58[0m] Beginning epoch 0...
+[[34m2026-10-09 08:40:45[0m] (step=0000020) Train Loss: 1.9606, Aux Recon: 0.0000, Grad Norm: 3.089, Train Steps/Sec: 0.06
+[[34m2026-10-09 08:40:54[0m] (step=0000040) Train Loss: 1.6055, Aux Recon: 0.0000, Grad Norm: 0.909, Train Steps/Sec: 2.25
+[[34m2026-10-09 08:41:09[0m] (step=0000060) Train Loss: 1.5159, Aux Recon: 0.0000, Grad Norm: 0.839, Train Steps/Sec: 1.29
+[[34m2026-10-09 08:41:23[0m] (step=0000080) Train Loss: 1.4202, Aux Recon: 0.0000, Grad Norm: 1.331, Train Steps/Sec: 1.49
+[[34m2026-10-09 08:41:36[0m] (step=0000100) Train Loss: 1.3098, Aux Recon: 0.0000, Grad Norm: 1.775, Train Steps/Sec: 1.52
+[[34m2026-10-09 08:41:43[0m] Saved checkpoint to /media/ltnghia33/sit/v2/results/smoke_method/checkpoints/latest.pt (step 100)
+[[34m2026-10-09 08:41:51[0m] (step=0000120) Train Loss: 1.2709, Aux Recon: 0.0000, Grad Norm: 2.529, Train Steps/Sec: 1.35
+[[34m2026-10-09 08:42:04[0m] (step=0000140) Train Loss: 1.2491, Aux Recon: 0.0000, Grad Norm: 1.617, Train Steps/Sec: 1.56
+[[34m2026-10-09 08:42:15[0m] (step=0000160) Train Loss: 1.2333, Aux Recon: 0.0000, Grad Norm: 2.096, Train Steps/Sec: 1.70
+[[34m2026-10-09 08:42:27[0m] (step=0000180) Train Loss: 1.1895, Aux Recon: 0.0000, Grad Norm: 2.438, Train Steps/Sec: 1.69
+[[34m2026-10-09 08:42:39[0m] (step=0000200) Train Loss: 1.1387, Aux Recon: 0.0000, Grad Norm: 1.069, Train Steps/Sec: 1.71
+[[34m2026-10-09 08:42:48[0m] Saved checkpoint to /media/ltnghia33/sit/v2/results/smoke_method/checkpoints/latest.pt (step 200)
+[[34m2026-10-09 08:42:48[0m] Done! Finished at step 200.
