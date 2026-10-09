@@ -17,6 +17,7 @@ import torch
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+import torch._dynamo
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
@@ -200,6 +201,9 @@ def main(args):
     raw_model = model.to(device)  # uncompiled module: EMA source and what gets checkpointed
     requires_grad(ema, False)
     if args.compile and use_cuda:
+        # If the compiler toolchain is broken on a node (e.g. Triton cannot link libcuda),
+        # run that graph eagerly instead of crashing; the warning shows up in the .err log.
+        torch._dynamo.config.suppress_errors = True
         model = torch.compile(raw_model)
     model = DDP(model, device_ids=[device]) if use_cuda else DDP(model)
     transport = create_transport(

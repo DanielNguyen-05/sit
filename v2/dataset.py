@@ -51,7 +51,7 @@ class MemmapLatentDataset(Dataset):
 
     def __getitem__(self, index):
         self._ensure()
-        x = torch.from_numpy(np.ascontiguousarray(self.lat[index]))   # (8,32,32) fp32
+        x = torch.from_numpy(np.array(self.lat[index], dtype=np.float32))   # (8,32,32) fp32, writable copy
         return x, torch.LongTensor([int(self.lab[index])])
 
     @staticmethod

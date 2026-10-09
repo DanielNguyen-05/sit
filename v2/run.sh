@@ -110,9 +110,12 @@ resubmit() {
     echo "Time limit close at $(date)."
     if [ -n "${SLURM_JOB_ID:-}" ] && [ "${RESUB:-0}" -lt 5 ]; then
         echo "Resubmitting to continue from latest.pt (resubmission $(( ${RESUB:-0} + 1 )) of at most 5)."
+        # keep the node choice of this job (e.g. --exclude=gpu04), so the run stays on one GPU type
+        EXC=$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | grep -o 'ExcNodeList=[^ ]*' | cut -d= -f2)
+        [ "$EXC" = "(null)" ] && EXC=""
         RESUB=$(( ${RESUB:-0} + 1 )) EXP="$EXP" sbatch --job-name="${SLURM_JOB_NAME:-sit}" \
             --gres="gpu:$NGPU" --cpus-per-task="$CPUS" ${SLURM_MEM_PER_NODE:+--mem="${SLURM_MEM_PER_NODE}M"} \
-            "$ROOT/run.sh" "$MODE" "$@"
+            ${EXC:+--exclude="$EXC"} "$ROOT/run.sh" "$MODE" "$@"
     else
         echo "Not resubmitting (limit of 5 reached). Submit the same command again to continue."
     fi
@@ -126,6 +129,17 @@ source /media/ltnghia33/miniconda3/etc/profile.d/conda.sh
 conda activate "$CONDA_ENV"
 cd "$ROOT"
 mkdir -p logs "$RESULTS"
+
+# torch.compile (Triton) links against "libcuda.so", but the GPU nodes only ship "libcuda.so.1".
+# Give Triton a private folder with the missing name (local /tmp, so jobs on different nodes
+# never share it). Without this, compiling fails and training falls back to eager mode.
+LIBCUDA=$( { /sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null; } | awk '/libcuda\.so\.1 /{print $NF; exit}')
+if [ -n "$LIBCUDA" ] && [ -z "${TRITON_LIBCUDA_PATH:-}" ]; then
+    LIBCUDA_DIR="${TMPDIR:-/tmp}/triton_libcuda_${SLURM_JOB_ID:-$$}"
+    mkdir -p "$LIBCUDA_DIR" && ln -sf "$LIBCUDA" "$LIBCUDA_DIR/libcuda.so"
+    export TRITON_LIBCUDA_PATH="$LIBCUDA_DIR"
+    echo "TRITON_LIBCUDA_PATH=$TRITON_LIBCUDA_PATH -> $LIBCUDA"
+fi
 
 which python
 python -c "import torch; print('torch', torch.__version__, '| cuda', torch.cuda.is_available(), '|', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no GPU')"
