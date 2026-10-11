@@ -3,7 +3,8 @@ wandb
 
 .DS_store
 samples
-results
+results/
 pretrained_models
 labels.npy
 latents.npy
+logs/

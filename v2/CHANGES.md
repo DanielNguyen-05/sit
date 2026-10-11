@@ -45,6 +45,16 @@ Unchanged copies: `dataset.py`, `repack_latents.py`, `transport/`.
 - `encode_latents.py`, `encode.sh`, `download_shards.py`: build the two files from the Hugging
   Face ImageNet-1k parquet shards, one shard at a time.
 
+## FID
+- `prepare_fid.sh` (login node, once): installs pytorch-fid, caches the Inception weights and the VAE,
+  and keeps only mu / sigma (~34MB) of OpenAI's ADM ImageNet-256 reference batch.
+- `eval_fid.py` + `fid.sh`: FID-50K computed in memory (no images written). Defaults = the SiT
+  paper's 400K setting: SDE Euler-Maruyama, 250 steps, no CFG, 50k samples. Same seeds for every
+  checkpoint. One JSON per checkpoint in `results/<exp>/fid/`.
+- The Fréchet distance is written out in `eval_fid.py` (pytorch-fid 0.3.0 calls a scipy function
+  signature that current scipy removed). Checked against an eigenvalue computation (rel. diff 1e-15)
+  and against itself (own statistics as reference gives 0.00).
+
 ## Not tested here
 Tested on CPU only, with fake latents, under torch 2.5.1 / timm 1.0.30 / diffusers 0.35.2 /
 Python 3.12: train, kill and resume, 2-process DDP for every variant (baseline, V1, V1 + aux,
