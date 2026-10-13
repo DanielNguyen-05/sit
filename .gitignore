@@ -8,3 +8,5 @@ pretrained_models
 labels.npy
 latents.npy
 logs/
+fid_ref/
+v2/.DS_Store

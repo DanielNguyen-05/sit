@@ -22,7 +22,22 @@ pip install -q "pytorch-fid==0.3.0" scipy
 
 echo "== 2/3 Inception weights + VAE (cached in your home folder)"
 python -c "from pytorch_fid.inception import InceptionV3; InceptionV3([3]); print('Inception OK')"
-python -c "from diffusers.models import AutoencoderKL; AutoencoderKL.from_pretrained('stabilityai/sd-vae-ft-ema'); print('VAE OK')"
+# Resolve the VAE to a real folder (config.json + weights) and record it, so GPU jobs load it from
+# disk by path and never ask the Hugging Face Hub anything (offline lookups failed on the GPU nodes).
+mkdir -p "$OUT"
+VAE_DIR=$(python - <<'PY'
+from huggingface_hub import snapshot_download
+print(snapshot_download("stabilityai/sd-vae-ft-ema",
+                        allow_patterns=["config.json", "diffusion_pytorch_model.safetensors"]))
+PY
+)
+case "$VAE_DIR" in
+    /media/*) ;;                                   # on the shared disk: GPU nodes can read it
+    *) echo "VAE cache is not on the shared disk ($VAE_DIR); copying it to $OUT/sd-vae-ft-ema"
+       rm -rf "$OUT/sd-vae-ft-ema"; cp -rL "$VAE_DIR" "$OUT/sd-vae-ft-ema"; VAE_DIR="$OUT/sd-vae-ft-ema" ;;
+esac
+python -c "import sys; from diffusers.models import AutoencoderKL; AutoencoderKL.from_pretrained(sys.argv[1]); print('VAE OK:', sys.argv[1])" "$VAE_DIR"
+echo "$VAE_DIR" > "$OUT/vae_path.txt"
 
 echo "== 3/3 reference statistics"
 if [ -f "$STATS" ]; then
