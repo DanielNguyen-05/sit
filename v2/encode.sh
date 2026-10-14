@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=32G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --gres=gpu:1
 #
 # Builds latents.npy + labels.npy from ImageNet-1k (Hugging Face parquet shards).

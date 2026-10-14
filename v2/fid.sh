@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --gres=gpu:1
 #
 # FID-50K for one or more checkpoints, nothing written to disk except one small JSON per checkpoint
@@ -15,7 +15,7 @@
 #
 #   sbatch --exclude=gpu04 fid.sh results/baseline/checkpoints/0400000.pt results/method/checkpoints/0400000.pt
 #   sbatch --exclude=gpu04 fid.sh results/method/checkpoints/0*.pt          # every milestone of a run
-#   SMOKE=1 sbatch --time=00:30:00 fid.sh results/baseline/checkpoints/0400000.pt   # 1,000 samples, quick check
+#   SMOKE=1 sbatch fid.sh results/baseline/checkpoints/0400000.pt   # 1,000 samples, quick check
 #
 # Roughly 1-1.5 h per S/2 checkpoint on one A100 (250 sampling steps x 50k images, fp32/tf32);
 # FID_ARGS="--amp bf16" about halves that. Already-scored checkpoints are skipped.
