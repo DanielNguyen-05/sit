@@ -39,6 +39,9 @@ if [ ! -f "$VAE_DIR/config.json" ] || [ ! -f "$VAE_DIR/diffusion_pytorch_model.s
     echo "       Run 'bash prepare_fid.sh' on the login node once; it puts the VAE in $(dirname "$REF")/sd-vae-ft-ema."
     exit 1
 fi
+export TORCH_HOME="$(dirname "$REF")/torch"   # Inception weights, put there by prepare_fid.sh
+[ -f "$TORCH_HOME/hub/checkpoints/pt_inception-2015-12-05-6726825d.pth" ] || {
+    echo "ERROR: Inception weights missing in $TORCH_HOME; run 'bash prepare_fid.sh' on the login node once."; exit 1; }
 
 source /media/ltnghia33/miniconda3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-sit}"

@@ -10,6 +10,8 @@
 set -eo pipefail
 
 OUT=${OUT:-/media/ltnghia33/sit/fid_ref}
+# Inception weights live next to the stats too: ~/.cache on the server gets cleaned up.
+export TORCH_HOME="$OUT/torch"
 DL_DIR=${DL_DIR:-/tmp/${USER}_fidref}
 URL=https://openaipublic.blob.core.windows.net/diffusion/jul-2021/ref_batches/imagenet/256/VIRTUAL_imagenet256_labeled.npz
 STATS="$OUT/VIRTUAL_imagenet256_labeled_stats.npz"
@@ -20,7 +22,7 @@ conda activate "${CONDA_ENV:-sit}"
 echo "== 1/3 pytorch-fid"
 pip install -q "pytorch-fid==0.3.0" scipy
 
-echo "== 2/3 Inception weights (torch cache) + VAE (fid_ref folder)"
+echo "== 2/3 Inception weights + VAE (both into the fid_ref folder)"
 python -c "from pytorch_fid.inception import InceptionV3; InceptionV3([3]); print('Inception OK')"
 # Download the VAE as plain files into our own folder (not the Hugging Face cache, which can be
 # cleaned up at any time), so GPU jobs load it by path and never ask the Hub anything.
