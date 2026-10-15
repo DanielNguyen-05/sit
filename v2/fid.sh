@@ -34,7 +34,11 @@ REF=${REF:-/media/ltnghia33/sit/fid_ref/VIRTUAL_imagenet256_labeled_stats.npz}
 VAE_FILE=$(dirname "$REF")/vae_path.txt
 [ -f "$VAE_FILE" ] || { echo "ERROR: $VAE_FILE missing; rerun prepare_fid.sh on the login node (it is quick now)."; exit 1; }
 VAE_DIR=$(cat "$VAE_FILE")
-[ -f "$VAE_DIR/config.json" ] || { echo "ERROR: VAE folder $VAE_DIR has no config.json; rerun prepare_fid.sh."; exit 1; }
+if [ ! -f "$VAE_DIR/config.json" ] || [ ! -f "$VAE_DIR/diffusion_pytorch_model.safetensors" ]; then
+    echo "ERROR: VAE files missing in $VAE_DIR (folder deleted or cleaned up?)."
+    echo "       Run 'bash prepare_fid.sh' on the login node once; it puts the VAE in $(dirname "$REF")/sd-vae-ft-ema."
+    exit 1
+fi
 
 source /media/ltnghia33/miniconda3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-sit}"
