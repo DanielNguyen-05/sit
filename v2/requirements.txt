@@ -13,3 +13,4 @@ pyarrow               # only for encode_latents.py
 # wandb               # optional: only when training with WANDB=1
 pytorch-fid==0.3.0    # FID (eval_fid.py); installed by prepare_fid.sh
 scipy
+matplotlib           # only for plot_fid.py
