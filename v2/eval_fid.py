@@ -77,7 +77,14 @@ def default_out(ckpt, args):
     run_dir = os.path.dirname(os.path.dirname(os.path.abspath(ckpt)))      # results/<exp>
     tag = f"{args.mode}-{args.sampling_method}-{args.num_sampling_steps}-cfg{args.cfg_scale}-n{args.num_samples}"
     name = os.path.splitext(os.path.basename(ckpt))[0]
-    return os.path.join(run_dir, "fid", f"{name}_{tag}.json")
+    # Budget runs go to their own folder so plot_fid.py (which reads fid/) never mixes them in.
+    sub = "fid"
+    if args.num_queries is not None or args.weak_queries is not None:
+        sub = "fid_budget"
+        tag += "-q" + str(args.num_queries or "max").replace(":", "_").replace(",", "+")
+        if args.weak_queries is not None:
+            tag += f"-weak{args.weak_queries}-g{args.guidance_scale}"
+    return os.path.join(run_dir, sub, f"{name}_{tag}.json")
 
 
 @torch.no_grad()
@@ -105,7 +112,12 @@ def evaluate(ckpt, args, rank, world, device, vae, inception, ref_mu, ref_sigma,
         sample_fn = sampler.sample_ode(sampling_method=args.sampling_method, num_steps=args.num_sampling_steps,
                                        atol=args.atol, rtol=args.rtol)
     use_cfg = args.cfg_scale > 1.0
-    model_fn = model.forward_with_cfg if use_cfg else model.forward
+    use_weak = args.weak_queries is not None
+    assert not (use_cfg and use_weak), "use either --cfg-scale or --weak-queries"
+    if args.num_queries is not None or use_weak:
+        assert margs.compress, "--num-queries / --weak-queries need a model with the compressor"
+        model.set_budget(args.num_queries)
+    model_fn = model.forward_with_cfg if use_cfg else (model.forward_with_weak_guidance if use_weak else model.forward)
 
     # Same seeds for every checkpoint, so all models are scored on the same noise and labels
     # (the generator draws z and y; the global seed drives the SDE's own noise).
@@ -133,6 +145,8 @@ def evaluate(ckpt, args, rank, world, device, vae, inception, ref_mu, ref_sigma,
             z = torch.cat([z, z], 0)
             y = torch.cat([y, torch.full_like(y, margs.num_classes)], 0)
             kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+        elif use_weak:
+            kwargs = dict(y=y, guidance_scale=args.guidance_scale, weak_queries=args.weak_queries)
         else:
             kwargs = dict(y=y)
         with torch.autocast(device.type, dtype=amp, enabled=amp is not None):
@@ -166,6 +180,9 @@ def evaluate(ckpt, args, rank, world, device, vae, inception, ref_mu, ref_sigma,
               "mode": args.mode, "sampling_method": args.sampling_method,
               "num_sampling_steps": args.num_sampling_steps, "diffusion_form": args.diffusion_form,
               "last_step": args.last_step, "last_step_size": args.last_step_size, "cfg_scale": args.cfg_scale,
+              "query_budgets": getattr(margs, "query_budgets", None), "budget_mode": getattr(margs, "budget_mode", None),
+              "num_queries": args.num_queries, "weak_queries": args.weak_queries,
+              "guidance_scale": args.guidance_scale if use_weak else None,
               "amp": args.amp, "seed": args.seed, "vae": args.vae, "ref_stats": os.path.abspath(args.ref_stats),
               "inception": "pytorch-fid pt_inception-2015-12-05", "world_size": world,
               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
@@ -231,6 +248,12 @@ if __name__ == "__main__":
     p.add_argument("--atol", type=float, default=1e-6)
     p.add_argument("--rtol", type=float, default=1e-3)
     p.add_argument("--cfg-scale", type=float, default=1.0, help="1.0 = no guidance (as in the 400K comparison of the SiT paper).")
+    p.add_argument("--num-queries", type=str, default=None,
+                   help="Bottleneck tokens at sampling: an int, or a schedule over t (0 = noise, 1 = data) "
+                        "such as 0.34:8,0.5:16,0.66:32,1:64. Default: all queries.")
+    p.add_argument("--weak-queries", type=int, default=None,
+                   help="Guide with the same model at this smaller budget (no unconditional pass).")
+    p.add_argument("--guidance-scale", type=float, default=1.5, help="Scale for --weak-queries.")
     p.add_argument("--amp", type=str, choices=["none", "bf16", "fp16"], default="none",
                    help="Autocast for the sampling network only. none (tf32) is the reference setting.")
     p.add_argument("--seed", type=int, default=0)

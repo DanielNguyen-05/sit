@@ -71,3 +71,25 @@ in the samplers, and `run.sh` end to end with a simulated time-limit signal.
 
 Not run: real GPUs (CUDA autocast, GradScaler on real fp16 gradients, throughput), real Slurm,
 and the Hugging Face download in `encode_latents.py`.
+
+## Token budgets (nested queries)
+
+One model, several bottleneck sizes. Old checkpoints and old commands behave exactly as before.
+
+- `models.py`: the V1 compressor takes `num_queries=K` (first K queries + a K-cell pooled grid).
+  `SiT(query_budgets=(8,16,32,64), budget_mode=...)` trains all budgets in one run: each batch is
+  split into equal groups, one per budget. `uniform` = random groups, `time` = ranked by t so the
+  noisiest samples get the fewest tokens, `time_rev` = the opposite (control).
+  `model.set_budget(...)` picks the budget at sampling; `forward_with_weak_guidance` guides the
+  model with a smaller budget of itself.
+- `train_utils.py`: `--query-budgets 8,16,32,64 --budget-mode {uniform,time,time_rev} --budget-jitter`.
+  Stored in the checkpoint, so eval rebuilds the right model.
+- `eval_fid.py`: `--num-queries 32` or a schedule `--num-queries 0.34:8,0.5:16,0.66:32,1:64`
+  (t=0 noise, t=1 data), `--weak-queries 16 --guidance-scale 1.5`. Results go to
+  `results/<exp>/fid_budget/`, separate from `fid/`.
+- `budget_table.py`: prints all `fid_budget` results as a table.
+
+Train (S/2):
+
+    EXP=nested_uniform sbatch --job-name=nest_uni  --exclude=gpu02,gpu04 run.sh method --query-budgets 8,16,32,64 --budget-mode uniform --ckpt-every 25000
+    EXP=nested_time    sbatch --job-name=nest_time --exclude=gpu02,gpu04 run.sh method --query-budgets 8,16,32,64 --budget-mode time --ckpt-every 25000

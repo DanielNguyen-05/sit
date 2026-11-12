@@ -36,7 +36,8 @@ def parse_sde_args(parser):
 # rebuilt with the architecture it was trained with.
 # ---------------------------------------------------------------------------------------
 MODEL_ARG_KEYS = ["model", "image_size", "num_classes", "query_len", "compressor_version",
-                  "keep_ratio", "compress", "detailer", "legacy_residual", "zero_init_final"]
+                  "keep_ratio", "compress", "detailer", "legacy_residual", "zero_init_final",
+                  "query_budgets", "budget_mode", "budget_jitter"]
 
 def parse_model_args(parser):
     import argparse
@@ -53,13 +54,30 @@ def parse_model_args(parser):
                        help="Reproduce the pre-fix V1 compressor/decompressor forward (old checkpoints only).")
     group.add_argument("--zero-init-final", action="store_true",
                        help="Zero-init the output layer like upstream SiT.")
+    group.add_argument("--query-budgets", type=str, default=None,
+                       help="e.g. 8,16,32,64: train one model for several bottleneck sizes (nested "
+                            "queries). The largest value replaces --query-len.")
+    group.add_argument("--budget-mode", type=str, default="uniform", choices=["uniform", "time", "time_rev"],
+                       help="uniform = random budget per sample; time = fewer tokens at high noise; "
+                            "time_rev = the opposite (control).")
+    group.add_argument("--budget-jitter", type=float, default=0.0,
+                       help="time modes: std of the noise added to t before ranking (0 = strict).")
+
+def parse_budgets(spec):
+    if not spec:
+        return None
+    return tuple(sorted(int(k) for k in str(spec).split(",")))
 
 def model_kwargs_from_args(args):
     """kwargs for SiT_models[args.model](...). getattr defaults keep old arg namespaces working."""
+    budgets = parse_budgets(getattr(args, "query_budgets", None))
     return dict(
         input_size=args.image_size // 8,
         num_classes=args.num_classes,
-        query_seqlen=getattr(args, "query_len", 32),
+        query_seqlen=budgets[-1] if budgets else getattr(args, "query_len", 32),
+        query_budgets=budgets,
+        budget_mode=getattr(args, "budget_mode", "uniform"),
+        budget_jitter=getattr(args, "budget_jitter", 0.0),
         compressor_version=getattr(args, "compressor_version", 1),
         keep_ratio=getattr(args, "keep_ratio", 0.5),
         compress=getattr(args, "compress", True),

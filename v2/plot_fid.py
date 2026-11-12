@@ -4,6 +4,7 @@ Reads the JSON files that eval_fid.py writes to results/<run>/fid/, so it can be
 as more checkpoints get scored.
 
     python plot_fid.py                                   # S/2: results/baseline vs results/method
+    python plot_fid.py --ref "SiT-S/2 (reported, different protocol)=200000:68.1,300000:60.8,400000:55.8,500000:53.1,600000:51.1,700000:49.5"
     python plot_fid.py --run "SiT-B/2=results/baseline_B2" --run "SiT-B/2 + ours=results/method_B2" \\
         --speed 2.6 --speed 4.4 --name fid_B2
 
@@ -70,6 +71,12 @@ def main(args):
         steps, fids = load_run(folder, args)
         assert len(steps), f"no FID results matching the filters in {folder}/fid"
         data.append(dict(label=label, steps=steps, fids=fids, hours=steps / it_s / 3600, it_s=it_s))
+    refs = []   # published curves: steps only (no comparable GPU hours), drawn dashed grey in panel (a)
+    for spec in (args.ref or []):
+        label, pts = spec.split("=", 1)
+        xy = sorted((float(a), float(b)) for a, b in (p.split(":") for p in pts.split(",")))
+        xy = [(a, b) for a, b in xy if a <= max(d["steps"].max() for d in data)] if not args.ref_all else xy
+        refs.append(dict(label=label, steps=np.array([a for a, _ in xy]), fids=np.array([b for _, b in xy])))
 
     plt.rcParams.update({"font.size": 9, "axes.titlesize": 9, "axes.labelsize": 9, "legend.fontsize": 8,
                          "xtick.labelsize": 8, "ytick.labelsize": 8, "pdf.fonttype": 42, "ps.fonttype": 42,
@@ -95,8 +102,14 @@ def main(args):
             if abs(ends[order[k]][0] - ends[order[k - 1]][0]) < 0.08 * xspan:   # only when they end side by side
                 ys[k] = max(ys[k], ys[k - 1] + gap)
         for k, i in enumerate(order):
+            if key == "steps":
+                break   # panel (b) carries the end values; in (a) the runs end side by side, next to the reference
             ax.annotate(f"{ends[i][1]:.1f}", (ends[i][0], ys[k]), xytext=(5, 0), textcoords="offset points",
                         va="center", fontsize=7.5, color="#3d3d3a", annotation_clip=False)
+        if key == "steps":
+            for r in refs:
+                ax.plot(r["steps"] / 1000, r["fids"], color="#9a9a94", lw=1.5, ls=(0, (4, 3)), marker="o", ms=3.5,
+                        mfc="#9a9a94", mec="#9a9a94", label=r["label"], zorder=2)
         ax.set_xlabel(xlabel)
         ax.grid(True, color="#e4e4e0", lw=0.6, zorder=0)
         ax.spines[["top", "right"]].set_visible(False)
@@ -106,8 +119,13 @@ def main(args):
     axes[0].set_ylabel(metric)
     axes[0].set_title("(a) FID vs. training steps", loc="left")
     axes[1].set_title("(b) FID vs. training time", loc="left")
-    axes[1].legend(frameon=False, loc="upper right")
-    fig.tight_layout(w_pad=1.5)
+    handles, labels = axes[0].get_legend_handles_labels()
+    if refs:   # one legend for both panels, under them, so the reference line is named once
+        fig.tight_layout(w_pad=1.5, rect=(0, 0.08, 1, 1))
+        fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False, bbox_to_anchor=(0.5, -0.01))
+    else:
+        axes[1].legend(frameon=False, loc="upper right")
+        fig.tight_layout(w_pad=1.5)
 
     os.makedirs(args.out_dir, exist_ok=True)
     base = os.path.join(args.out_dir, args.name)
@@ -141,6 +159,10 @@ if __name__ == "__main__":
     p.add_argument("--mode", default="SDE")
     p.add_argument("--sampling-steps", type=int, default=250)
     p.add_argument("--cfg", type=float, default=1.0)
+    p.add_argument("--ref", action="append",
+                   help='Published curve for reference, "Label=step:fid,step:fid,..." (e.g. read off a paper figure). '
+                        'Drawn dashed grey in panel (a) only.')
+    p.add_argument("--ref-all", action="store_true", help="Also draw reference points beyond the last trained step.")
     p.add_argument("--width", type=float, default=7.0, help="Figure width in inches (7 = two-column text width).")
     p.add_argument("--out-dir", default="results/figures")
     p.add_argument("--name", default="fid_S2")
