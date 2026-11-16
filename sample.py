@@ -9,9 +9,11 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 from torchvision.utils import save_image
 from diffusers.models import AutoencoderKL
-from download import find_model
+from download import find_model_and_args
+import paths
 from models import SiT_models
-from train_utils import parse_ode_args, parse_sde_args, parse_transport_args
+from train_utils import parse_ode_args, parse_sde_args, parse_transport_args, parse_model_args, \
+    model_kwargs_from_args, apply_checkpoint_args
 from transport import create_transport, Sampler
 import argparse
 import sys
@@ -33,17 +35,14 @@ def main(mode, args):
     else:
         learn_sigma = False
 
-    # Load model:
-    latent_size = args.image_size // 8
-    model = SiT_models[args.model](
-        input_size=latent_size,
-        num_classes=args.num_classes,
-        learn_sigma=learn_sigma,
-        query_seqlen=args.query_len
-    ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
     ckpt_path = args.ckpt or f"SiT-XL-2-{args.image_size}x{args.image_size}.pt"
-    state_dict = find_model(ckpt_path)
+    state_dict, ckpt_args = find_model_and_args(ckpt_path)
+    apply_checkpoint_args(args, ckpt_args)   # architecture follows the checkpoint
+
+    # Load model:
+    latent_size = args.image_size // 8
+    model = SiT_models[args.model](learn_sigma=learn_sigma, **model_kwargs_from_args(args)).to(device)
     model.load_state_dict(state_dict)
     model.eval()  # important!
     transport = create_transport(
@@ -83,7 +82,7 @@ def main(mode, args):
         )
     
 
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    vae = AutoencoderKL.from_pretrained(paths.vae_source(args.vae)).to(device)
 
     # Labels to condition the model with (feel free to change):
     class_labels = [207]
@@ -95,7 +94,7 @@ def main(mode, args):
 
     # Setup classifier-free guidance:
     z = torch.cat([z, z], 0)
-    y_null = torch.tensor([1000] * n, device=device)
+    y_null = torch.tensor([args.num_classes] * n, device=device)
     y = torch.cat([y, y_null], 0)
     model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
 
@@ -128,12 +127,12 @@ if __name__ == "__main__":
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
-    parser.add_argument("--query-len", type=int, default=32, required=False)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Optional path to a SiT checkpoint (default: auto-download a pre-trained SiT-XL/2 model).")
 
 
+    parse_model_args(parser)
     parse_transport_args(parser)
     if mode == "ODE":
         parse_ode_args(parser)

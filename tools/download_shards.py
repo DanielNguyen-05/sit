@@ -3,7 +3,7 @@ Downloads the ImageNet-1k train parquet shards one by one, never keeping more th
 of them at a time. Run it on a node WITH internet (the login node) while encode_latents.py runs
 with --wait --delete-shards on a GPU node: this script feeds shards, the encoder consumes them.
 
-    python download_shards.py --src /media/ltnghia33/imagenet_parquet
+    python tools/download_shards.py --src /path/to/imagenet_parquet
 
 Needs a Hugging Face token with access to ILSVRC/imagenet-1k (accept the terms on the dataset
 page, then `huggingface-cli login`). Safe to interrupt and restart.

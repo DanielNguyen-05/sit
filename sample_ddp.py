@@ -11,10 +11,12 @@ For a simple single-GPU/CPU sampling script, see sample.py.
 import torch
 import torch.distributed as dist
 from models import SiT_models
-from download import find_model
+from download import find_model_and_args
+import paths
 from transport import create_transport, Sampler
 from diffusers.models import AutoencoderKL
-from train_utils import parse_ode_args, parse_sde_args, parse_transport_args
+from train_utils import parse_ode_args, parse_sde_args, parse_transport_args, parse_model_args, \
+    model_kwargs_from_args, apply_checkpoint_args
 from tqdm import tqdm
 import os
 from PIL import Image
@@ -67,19 +69,16 @@ def main(mode, args):
     else:
         learn_sigma = False
 
-    # Load model:
-    latent_size = args.image_size // 8
-    model = SiT_models[args.model](
-        input_size=latent_size,
-        num_classes=args.num_classes,
-        learn_sigma=learn_sigma,
-        query_seqlen=args.query_len,
-        compressor_version=args.compressor_version,   # must match the trained checkpoint
-        keep_ratio=args.keep_ratio,                   # V3 only
-    ).to(device)
     # Auto-download a pre-trained model or load a custom SiT checkpoint from train.py:
     ckpt_path = args.ckpt or f"SiT-XL-2-{args.image_size}x{args.image_size}.pt"
-    state_dict = find_model(ckpt_path)
+    state_dict, ckpt_args = find_model_and_args(ckpt_path)
+    # The architecture comes from the args stored in the checkpoint, so it cannot silently
+    # disagree with how the model was trained (command-line values are only a fallback).
+    apply_checkpoint_args(args, ckpt_args, log=print if rank == 0 else (lambda *a: None))
+
+    # Load model:
+    latent_size = args.image_size // 8
+    model = SiT_models[args.model](learn_sigma=learn_sigma, **model_kwargs_from_args(args)).to(device)
     model.load_state_dict(state_dict)
     model.eval()  # important!
     
@@ -118,7 +117,7 @@ def main(mode, args):
             last_step_size=args.last_step_size,
             num_steps=args.num_sampling_steps,
         )
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    vae = AutoencoderKL.from_pretrained(paths.vae_source(args.vae)).to(device)
     assert args.cfg_scale >= 1.0, "In almost all cases, cfg_scale be >= 1.0"
     using_cfg = args.cfg_scale > 1.0
 
@@ -165,7 +164,7 @@ def main(mode, args):
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
-            y_null = torch.tensor([1000] * n, device=device)
+            y_null = torch.tensor([args.num_classes] * n, device=device)
             y = torch.cat([y, y_null], 0)
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
             model_fn = model.forward_with_cfg
@@ -216,11 +215,6 @@ if __name__ == "__main__":
     parser.add_argument("--num-fid-samples", type=int, default=50_000)
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
-    parser.add_argument("--query-len", type=int, default=32, required=False)
-    parser.add_argument("--compressor-version", type=int, default=1, choices=[1, 2, 3],
-                        help="Must match the trained checkpoint: 1 = fixed, 2 = soft adaptive, 3 = hard top-k.")
-    parser.add_argument("--keep-ratio", type=float, default=0.5,
-                        help="V3 only: must match the trained checkpoint.")
     parser.add_argument("--cfg-scale",  type=float, default=1.0)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--global-seed", type=int, default=0)
@@ -229,6 +223,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Optional path to a SiT checkpoint (default: auto-download a pre-trained SiT-XL/2 model).")
 
+    parse_model_args(parser)
     parse_transport_args(parser)
     if mode == "ODE":
         parse_ode_args(parser)

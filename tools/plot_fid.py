@@ -3,9 +3,9 @@ Paper figure: FID against training steps (a) and against training time (b), base
 Reads the JSON files that eval_fid.py writes to results/<run>/fid/, so it can be rerun at any time
 as more checkpoints get scored.
 
-    python plot_fid.py                                   # S/2: results/baseline vs results/method
-    python plot_fid.py --ref "SiT-S/2 (reported, different protocol)=200000:68.1,300000:60.8,400000:55.8,500000:53.1,600000:51.1,700000:49.5"
-    python plot_fid.py --run "SiT-B/2=results/baseline_B2" --run "SiT-B/2 + ours=results/method_B2" \\
+    python tools/plot_fid.py                                   # S/2: results/baseline vs results/method
+    python tools/plot_fid.py --ref "SiT-S/2 (reported, different protocol)=200000:68.1,300000:60.8,400000:55.8,500000:53.1,600000:51.1,700000:49.5"
+    python tools/plot_fid.py --run "SiT-B/2=results/baseline_B2" --run "SiT-B/2 + ours=results/method_B2" \\
         --speed 2.6 --speed 4.4 --name fid_B2
 
 --speed is training iterations per second of each run (same order as --run). The defaults are the
@@ -23,6 +23,7 @@ import csv
 import glob
 import json
 import os
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tools/ -> repository root
 
 import numpy as np
 
@@ -62,7 +63,7 @@ def main(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    runs = args.run or ["SiT-S/2=results/baseline", "SiT-S/2 + ours=results/method"]
+    runs = args.run or [f"SiT-S/2={REPO}/results/baseline", f"SiT-S/2 + ours={REPO}/results/method"]
     speeds = args.speed or [7.75, 13.29]
     assert len(speeds) == len(runs), "give one --speed per --run"
     data = []
@@ -164,6 +165,6 @@ if __name__ == "__main__":
                         'Drawn dashed grey in panel (a) only.')
     p.add_argument("--ref-all", action="store_true", help="Also draw reference points beyond the last trained step.")
     p.add_argument("--width", type=float, default=7.0, help="Figure width in inches (7 = two-column text width).")
-    p.add_argument("--out-dir", default="results/figures")
+    p.add_argument("--out-dir", default=os.path.join(REPO, "results", "figures"))
     p.add_argument("--name", default="fid_S2")
     main(p.parse_args())

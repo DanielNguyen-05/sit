@@ -1,12 +1,18 @@
-__pycache__
-wandb
+# data, weights and outputs: big, machine-specific, never in git
+/data/
+/fid_ref/
+/results/
+/pretrained_models/
+/samples/
+/logs/*
+!/logs/.gitkeep
+wandb/
+*.pt
+*.npy
+*.npz
 
-.DS_store
-samples
-results/
-pretrained_models
-labels.npy
-latents.npy
-logs/
-fid_ref/
-v2/.DS_Store
+# python / editor
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store

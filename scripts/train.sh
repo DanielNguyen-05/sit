@@ -11,26 +11,26 @@
 #SBATCH --gres=gpu:1
 #SBATCH --signal=B:USR1@300
 #
-# Train SiT on the Slurm cluster. Always submit from the folder that contains train.py,
-# and create logs/ first (Slurm does not create it):
+# Train SiT on the Slurm cluster. Always submit from the repository root (folder with train.py):
 #
-#   cd /media/ltnghia33/sit/v2 && mkdir -p logs
-#
-#   sbatch --job-name=base   run.sh baseline          # plain SiT, same codebase
-#   sbatch --job-name=method run.sh method            # compressor (residual fixed)
-#   sbatch --job-name=legacy run.sh legacy            # compressor as in the old code
-#   EXP=method_aux sbatch run.sh method --aux-recon   # anything after the mode goes to train.py
-#   sbatch --gres=gpu:4 --cpus-per-task=32 --mem=128G run.sh method   # 4 GPUs, same global batch
+#   cd /media/ltnghia33/sit
+#   sbatch --job-name=base   scripts/train.sh baseline          # plain SiT, same codebase
+#   sbatch --job-name=method scripts/train.sh method            # compressor (residual fixed)
+#   sbatch --job-name=legacy scripts/train.sh legacy            # compressor as in the old code
+#   EXP=method_aux sbatch scripts/train.sh method --aux-recon   # anything after the mode goes to train.py
+#   MODEL=SiT-B/2 EXP=method_B2 sbatch scripts/train.sh method
+#   sbatch --gres=gpu:4 --cpus-per-task=32 --mem=128G scripts/train.sh method   # 4 GPUs, same global batch
+#   EXP=nested_uniform sbatch scripts/train.sh method --query-budgets 8,16,32,64 --budget-mode uniform --ckpt-every 25000
 #
 # Short test inside an interactive GPU session (200 steps, separate smoke_* folder):
 #   srun --gres=gpu:1 --cpus-per-task=8 --mem=32G --time=00:30:00 --pty bash
-#   SMOKE=1 bash run.sh method
+#   SMOKE=1 bash scripts/train.sh method
 #
 # Print the command without running it (works on the login node):
-#   DRY_RUN=1 bash run.sh baseline
+#   DRY_RUN=1 bash scripts/train.sh baseline
 #
 # Resubmitting the same command continues from results/<EXP>/checkpoints/latest.pt.
-# Settings (environment variables): EXP MODEL STEPS BATCH AMP COMPILE DATA RESULTS WANDB CONDA_ENV
+# Settings (environment variables): EXP MODEL STEPS BATCH AMP COMPILE WANDB, plus the paths in env.sh.
 
 set -eo pipefail
 
@@ -39,21 +39,14 @@ case "$MODE" in
     baseline) MODE_FLAGS="--no-compress --no-detailer" ;;
     method)   MODE_FLAGS="" ;;
     legacy)   MODE_FLAGS="--legacy-residual" ;;
-    *) echo "usage: run.sh {baseline|method|legacy} [extra train.py flags]"; exit 2 ;;
+    *) echo "usage: sbatch scripts/train.sh {baseline|method|legacy} [extra train.py flags]"; exit 2 ;;
 esac
 shift
 
-# Folder with train.py: the current folder (sbatch starts in the submit folder), else the
-# submit folder, else wherever this script lives.
-if [ -z "${ROOT:-}" ]; then
-    for d in "$PWD" "${SLURM_SUBMIT_DIR:-}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; do
-        if [ -n "$d" ] && [ -f "$d/train.py" ]; then ROOT="$d"; break; fi
-    done
-fi
-if [ -z "${ROOT:-}" ]; then echo "ERROR: train.py not found; cd into the code folder first."; exit 1; fi
-DATA=${DATA:-/media/ltnghia33/sit}               # folder with latents.npy + labels.npy
-RESULTS=${RESULTS:-$ROOT/results}
-CONDA_ENV=${CONDA_ENV:-sit}
+_r=${SIT_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}; [ -f "$_r/scripts/env.sh" ] || _r="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$_r/scripts/env.sh"
+cd "$SIT_ROOT"
+
 MODEL=${MODEL:-SiT-S/2}
 STEPS=${STEPS:-400000}
 BATCH=${BATCH:-256}
@@ -80,7 +73,7 @@ EXTRA_FLAGS=""
 [ "${WANDB:-0}" = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --wandb"     # needs ENTITY, PROJECT, WANDB_KEY
 
 CMD=(torchrun --standalone --nproc_per_node="$NGPU" train.py
-     --data-path "$DATA" --results-dir "$RESULTS" --exp-name "$EXP"
+     --data-path "$SIT_DATA" --results-dir "$SIT_RESULTS" --exp-name "$EXP"
      --model "$MODEL" --global-batch-size "$BATCH" --max-steps "$STEPS"
      --num-workers "$WORKERS" --amp "$AMP"
      --log-every "$LOG_EVERY" --ckpt-every "$CKPT_EVERY" --keep-every "$KEEP_EVERY"
@@ -91,15 +84,17 @@ echo "================================"
 echo "Job ID     : ${SLURM_JOB_ID:-LOCAL}"
 echo "Node       : $(hostname)"
 echo "Start time : $(date)"
-echo "Run folder : $RESULTS/$EXP"
+echo "Repository : $SIT_ROOT"
+echo "Data       : $SIT_DATA"
+echo "Run folder : $SIT_RESULTS/$EXP"
 echo "GPUs       : $NGPU   CPUs: $CPUS   workers/GPU: $WORKERS"
 echo "Command    : ${CMD[*]}"
 echo "================================"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then exit 0; fi
 
-if [ ! -f "$DATA/latents.npy" ] || [ ! -f "$DATA/labels.npy" ]; then
-    echo "ERROR: latents.npy / labels.npy not found in $DATA (set DATA=/path/to/folder)"; exit 1
+if [ ! -f "$SIT_DATA/latents.npy" ] || [ ! -f "$SIT_DATA/labels.npy" ]; then
+    echo "ERROR: latents.npy / labels.npy not found in $SIT_DATA (set DATA=/path/to/folder)"; exit 1
 fi
 
 # Slurm sends USR1 five minutes before the time limit (see --signal above). The run is then
@@ -113,9 +108,10 @@ resubmit() {
         # keep the node choice of this job (e.g. --exclude=gpu04), so the run stays on one GPU type
         EXC=$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | grep -o 'ExcNodeList=[^ ]*' | cut -d= -f2)
         [ "$EXC" = "(null)" ] && EXC=""
-        RESUB=$(( ${RESUB:-0} + 1 )) EXP="$EXP" sbatch --job-name="${SLURM_JOB_NAME:-sit}" \
+        (cd "$SIT_ROOT" && RESUB=$(( ${RESUB:-0} + 1 )) EXP="$EXP" MODEL="$MODEL" STEPS="$STEPS" BATCH="$BATCH" AMP="$AMP" \
+            sbatch --job-name="${SLURM_JOB_NAME:-sit}" \
             --gres="gpu:$NGPU" --cpus-per-task="$CPUS" ${SLURM_MEM_PER_NODE:+--mem="${SLURM_MEM_PER_NODE}M"} \
-            ${EXC:+--exclude="$EXC"} "$ROOT/run.sh" "$MODE" "$@"
+            ${EXC:+--exclude="$EXC"} scripts/train.sh "$MODE" "$@")
     else
         echo "Not resubmitting (limit of 5 reached). Submit the same command again to continue."
     fi
@@ -125,21 +121,8 @@ resubmit() {
 }
 trap 'resubmit "$@"' USR1
 
-source /media/ltnghia33/miniconda3/etc/profile.d/conda.sh
-conda activate "$CONDA_ENV"
-cd "$ROOT"
-mkdir -p logs "$RESULTS"
-
-# torch.compile (Triton) links against "libcuda.so", but the GPU nodes only ship "libcuda.so.1".
-# Give Triton a private folder with the missing name (local /tmp, so jobs on different nodes
-# never share it). Without this, compiling fails and training falls back to eager mode.
-LIBCUDA=$( { /sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null; } | awk '/libcuda\.so\.1 /{print $NF; exit}')
-if [ -n "$LIBCUDA" ] && [ -z "${TRITON_LIBCUDA_PATH:-}" ]; then
-    LIBCUDA_DIR="${TMPDIR:-/tmp}/triton_libcuda_${SLURM_JOB_ID:-$$}"
-    mkdir -p "$LIBCUDA_DIR" && ln -sf "$LIBCUDA" "$LIBCUDA_DIR/libcuda.so"
-    export TRITON_LIBCUDA_PATH="$LIBCUDA_DIR"
-    echo "TRITON_LIBCUDA_PATH=$TRITON_LIBCUDA_PATH -> $LIBCUDA"
-fi
+activate_env
+setup_libcuda
 
 which python
 python -c "import torch; print('torch', torch.__version__, '| cuda', torch.cuda.is_available(), '|', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no GPU')"

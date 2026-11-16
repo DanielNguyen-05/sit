@@ -8,11 +8,21 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Mlp, Attention
 from einops import rearrange
 from typing import Tuple, List
+
+class RMSNorm(nn.RMSNorm):
+    """nn.RMSNorm evaluated in fp32. Under fp16 autocast (e.g. V100, no native bf16) x**2
+    overflows as soon as |x| > 255, so the norm is the first place a NaN appears. Parameter
+    names/shapes are identical to nn.RMSNorm, so old checkpoints load unchanged."""
+    def forward(self, x):
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            return super().forward(x.float()).to(x.dtype)
+
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -102,9 +112,9 @@ class SiTBlock(nn.Module):
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
-        self.norm1 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm1 = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
-        self.norm2 = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm2 = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
         self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
@@ -127,7 +137,7 @@ class FinalLayer(nn.Module):
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
-        self.norm_final = nn.RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm_final = RMSNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
@@ -148,8 +158,11 @@ def power_of_2_closest_to_root(x: int):
     return i
 
 class QFormerBasedCompressor(nn.Module):
-    def __init__(self, query_seqlen:int, model_dim:int):
+    def __init__(self, query_seqlen:int, model_dim:int, legacy_residual:bool=False):
         super().__init__()
+        # legacy_residual=True reproduces the pre-fix forward (the FFN output replaced the
+        # attention stream instead of being added to it). Only for old checkpoints.
+        self.legacy_residual = legacy_residual
         self.query = nn.Parameter(torch.randn([query_seqlen, model_dim]))
         wq = power_of_2_closest_to_root(query_seqlen)
         hq = query_seqlen // wq
@@ -158,26 +171,36 @@ class QFormerBasedCompressor(nn.Module):
             Mlp(in_features=model_dim, hidden_features=model_dim*2, out_features=model_dim*2, act_layer=nn.SiLU, drop=0)
             for _ in range(1)])
         self.attn = nn.ModuleList([nn.MultiheadAttention(model_dim, model_dim>>6, bias=True, add_bias_kv=True, batch_first=True) for _ in range(1)])
-        self.norm1 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(1)])
-        self.norm2 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(1)])
+        self.norm1 = nn.ModuleList([RMSNorm(model_dim) for _ in range(1)])
+        self.norm2 = nn.ModuleList([RMSNorm(model_dim) for _ in range(1)])
         self.blend = nn.Linear(2 * model_dim, model_dim)
             
         
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:torch.Tensor, num_queries:int=None):
+        """num_queries=K < query_seqlen uses only the first K queries (nested prefix) and a
+        K-cell pooled grid; K = query_seqlen (or None) is exactly the original forward."""
         B, L, D = x.shape
-        query = self.query.expand((B, -1, -1))
+        K = self.query.shape[0] if num_queries is None else int(num_queries)
+        assert 0 < K <= self.query.shape[0], f"num_queries={K} outside 1..{self.query.shape[0]}"
+        query = self.query[:K].expand((B, -1, -1))
         wl = power_of_2_closest_to_root(L)
 
         r = rearrange(x, "B (H W) C -> B C H W", W=wl)
-        r = self.pool(r)
+        if K == self.query.shape[0]:
+            r = self.pool(r)
+        else:
+            wq = power_of_2_closest_to_root(K)
+            hq = K // wq
+            assert hq * wq == K, f"num_queries={K} does not form a grid (use powers of two)"
+            r = F.adaptive_avg_pool2d(self.pool[0](r), (hq, wq))
         r = rearrange(r, "B C H W -> B (H W) C")
+        q = query
         for ffn, attn, norm1, norm2 in zip(self.ffn, self.attn, self.norm1, self.norm2):
-            x = query + norm1(attn.forward(query, x, x)[0])
-            x, gate = torch.chunk(ffn(x), 2, dim=-1)
-            x = x + norm2(x) * gate
-        
-        x = self.blend(torch.cat([r, x], dim=-1))
-        return x
+            q = q + norm1(attn.forward(q, x, x, need_weights=False)[0])
+            h, gate = torch.chunk(ffn(q), 2, dim=-1)
+            q = (h if self.legacy_residual else q) + norm2(h) * gate
+
+        return self.blend(torch.cat([r, q], dim=-1))
 
 
 class QFormerBasedCompressorV2(nn.Module):
@@ -205,8 +228,8 @@ class QFormerBasedCompressorV2(nn.Module):
         # add_bias_kv=False so the importance attn_mask aligns with exactly L keys (no +1 bias token)
         self.attn = nn.ModuleList([nn.MultiheadAttention(model_dim, model_dim>>6, bias=True, add_bias_kv=False, batch_first=True) for _ in range(num_layers)])
         self.ffn = nn.ModuleList([Mlp(in_features=model_dim, hidden_features=model_dim*2, out_features=model_dim*2, act_layer=nn.SiLU, drop=0) for _ in range(num_layers)])
-        self.norm1 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(num_layers)])
-        self.norm2 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(num_layers)])
+        self.norm1 = nn.ModuleList([RMSNorm(model_dim) for _ in range(num_layers)])
+        self.norm2 = nn.ModuleList([RMSNorm(model_dim) for _ in range(num_layers)])
         self.blend = nn.Linear(2 * model_dim, model_dim)
         self._zero_adaptive()
 
@@ -264,8 +287,8 @@ class QFormerBasedCompressorV3(nn.Module):
                                   nn.AdaptiveAvgPool2d((hq, wq)))
         self.attn = nn.ModuleList([nn.MultiheadAttention(model_dim, model_dim>>6, bias=True, add_bias_kv=False, batch_first=True) for _ in range(num_layers)])
         self.ffn = nn.ModuleList([Mlp(in_features=model_dim, hidden_features=model_dim*2, out_features=model_dim*2, act_layer=nn.SiLU, drop=0) for _ in range(num_layers)])
-        self.norm1 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(num_layers)])
-        self.norm2 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(num_layers)])
+        self.norm1 = nn.ModuleList([RMSNorm(model_dim) for _ in range(num_layers)])
+        self.norm2 = nn.ModuleList([RMSNorm(model_dim) for _ in range(num_layers)])
         self.blend = nn.Linear(2 * model_dim, model_dim)
         self._zero_adaptive()
 
@@ -309,8 +332,9 @@ class QFormerDecompressor(nn.Module):
     decompressor can place recovered detail where it belongs -- E-MMDiT (arXiv:2510.27135)
     ablates this "Position Reinforcement on reconstructed tokens" as ~10% FID (24.78->22.42),
     and it matters even more here since the Q-Former compressor pools away all spatial layout."""
-    def __init__(self, model_dim:int, max_seqlen:int=4096):
+    def __init__(self, model_dim:int, max_seqlen:int=4096, legacy_residual:bool=False):
         super().__init__()
+        self.legacy_residual = legacy_residual   # see QFormerBasedCompressor
         NUM_LAYERS = 1
         self.pos_query = nn.Parameter(torch.empty(max_seqlen, model_dim))
         nn.init.trunc_normal_(self.pos_query, std=0.02)
@@ -320,8 +344,8 @@ class QFormerDecompressor(nn.Module):
         self.ffn = nn.ModuleList([
             Mlp(in_features=model_dim, hidden_features=model_dim*4, out_features=model_dim*2, act_layer=nn.SiLU, drop=0)
             for _ in range(NUM_LAYERS)])
-        self.norm1 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(NUM_LAYERS)])
-        self.norm2 = nn.ModuleList([nn.RMSNorm(model_dim) for _ in range(NUM_LAYERS)])
+        self.norm1 = nn.ModuleList([RMSNorm(model_dim) for _ in range(NUM_LAYERS)])
+        self.norm2 = nn.ModuleList([RMSNorm(model_dim) for _ in range(NUM_LAYERS)])
 
 
     def forward(self, x:torch.Tensor, original_seqlen:int):
@@ -330,9 +354,9 @@ class QFormerDecompressor(nn.Module):
             f"decompressor pos_query bank ({self.pos_query.shape[0]}) too small for seqlen {original_seqlen}"
         q = self.pos_query[:original_seqlen].expand(B, -1, -1)   # (B, L, D) position queries
         for cross, ffn, norm1, norm2 in zip(self.cross, self.ffn, self.norm1, self.norm2):
-            q = q + norm1(cross(q, x, x)[0])                     # cross-attend queries -> compressed tokens
-            q, gate = torch.chunk(ffn(q), 2, dim=-1)
-            q = q + norm2(q) * gate
+            q = q + norm1(cross(q, x, x, need_weights=False)[0])  # cross-attend queries -> compressed tokens
+            h, gate = torch.chunk(ffn(q), 2, dim=-1)
+            q = (h if self.legacy_residual else q) + norm2(h) * gate
         return q
     
 class SiT(nn.Module):
@@ -356,6 +380,13 @@ class SiT(nn.Module):
         aux_recon_weight:float=0.1,
         compressor_version:int=1,   # 1 = fixed pool+xattn (default); 2 = soft content-adaptive; 3 = hard top-k routing
         keep_ratio:float=0.5,       # V3 only: fraction of input tokens kept by the top-k router
+        compress:bool=True,         # False = plain SiT trunk (no compressor/decompressor/fuser): the in-codebase baseline
+        detailer:bool=True,         # False = drop the pooled-input skip before the final layer
+        legacy_residual:bool=False, # True = pre-fix V1 compressor/decompressor forward (old checkpoints only)
+        zero_init_final:bool=False, # True = zero-init the output layer like upstream SiT
+        query_budgets=None,         # e.g. (8, 16, 32, 64): train one model for several token budgets (nested queries)
+        budget_mode:str="uniform",  # uniform = random budget per sample; time = fewer tokens at high noise; time_rev = the opposite
+        budget_jitter:float=0.0,    # time modes: std of the noise added to t before ranking (0 = strict)
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -369,7 +400,19 @@ class SiT(nn.Module):
         self.patch_size = patch_size
         self.num_heads = num_heads
         
+        self.compress = compress
+        self.use_detailer = detailer
+        self.zero_init_final = zero_init_final
         self.layer_landmarks = [depth // 6, depth - (depth // 6)]
+        self.query_budgets = tuple(sorted(int(k) for k in query_budgets)) if query_budgets else None
+        self.budget_mode = budget_mode
+        self.budget_jitter = budget_jitter
+        self.budget = None          # inference budget, see set_budget()
+        if self.query_budgets:
+            assert compress and compressor_version == 1, "query_budgets needs the V1 compressor"
+            assert not aux_recon, "query_budgets and aux_recon are not supported together"
+            assert budget_mode in ("uniform", "time", "time_rev"), budget_mode
+            assert query_seqlen == self.query_budgets[-1], "query_seqlen must equal the largest budget"
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -382,16 +425,20 @@ class SiT(nn.Module):
             SiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.detailer = nn.Linear(hidden_size + in_channels, hidden_size)
+        if detailer:
+            self.detailer = nn.Linear(hidden_size + in_channels, hidden_size)
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        if compressor_version == 3:
-            self.compressor = QFormerBasedCompressorV3(query_seqlen=query_seqlen, model_dim=hidden_size, keep_ratio=keep_ratio)
-        elif compressor_version == 2:
-            self.compressor = QFormerBasedCompressorV2(query_seqlen=query_seqlen, model_dim=hidden_size)
-        else:
-            self.compressor = QFormerBasedCompressor(query_seqlen=query_seqlen, model_dim=hidden_size)
-        self.decompressor = QFormerDecompressor(hidden_size)
-        self.fuser = nn.Linear(hidden_size * 2, hidden_size)
+        # The extra modules are only built when used, so the baseline's parameter count and
+        # state_dict are those of a plain SiT.
+        if compress:
+            if compressor_version == 3:
+                self.compressor = QFormerBasedCompressorV3(query_seqlen=query_seqlen, model_dim=hidden_size, keep_ratio=keep_ratio)
+            elif compressor_version == 2:
+                self.compressor = QFormerBasedCompressorV2(query_seqlen=query_seqlen, model_dim=hidden_size)
+            else:
+                self.compressor = QFormerBasedCompressor(query_seqlen=query_seqlen, model_dim=hidden_size, legacy_residual=legacy_residual)
+            self.decompressor = QFormerDecompressor(hidden_size, legacy_residual=legacy_residual)
+            self.fuser = nn.Linear(hidden_size * 2, hidden_size)
         self.initialize_weights()
         
 
@@ -403,10 +450,11 @@ class SiT(nn.Module):
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
         self.apply(_basic_init)
-        if hasattr(self.compressor, 'query'):          # V1
-            nn.init.normal_(self.compressor.query, 0, .02)
-        if hasattr(self.compressor, '_zero_adaptive'):  # V2: re-zero FiLM/importance after xavier apply
-            self.compressor._zero_adaptive()
+        if self.compress:
+            if hasattr(self.compressor, 'query'):          # V1
+                nn.init.normal_(self.compressor.query, 0, .02)
+            if hasattr(self.compressor, '_zero_adaptive'):  # V2: re-zero FiLM/importance after xavier apply
+                self.compressor._zero_adaptive()
         # decompressor.pos_query is trunc_normal_-initialised in its own __init__
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
@@ -430,6 +478,13 @@ class SiT(nn.Module):
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
+        # Upstream SiT also zero-inits the output layer; this fork dropped that, so it is opt-in.
+        if self.zero_init_final:
+            nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+            nn.init.constant_(self.final_layer.linear.weight, 0)
+            nn.init.constant_(self.final_layer.linear.bias, 0)
+
     def unpatchify(self, x):
         """
         x: (N, T, patch_size**2 * C)
@@ -445,46 +500,123 @@ class SiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y):
+    # ------------------------------------------------------------------ token budgets
+    def set_budget(self, spec):
+        """Number of bottleneck tokens used outside training.
+        None = all queries; an int = fixed; "0.34:8,0.5:16,0.66:32,1:64" = K by time
+        (first entry whose threshold is >= t; t=0 is noise, t=1 is data)."""
+        if spec is None or isinstance(spec, int):
+            self.budget = spec
+        elif str(spec).replace(" ", "").isdigit():
+            self.budget = int(spec)
+        else:
+            sched = sorted((float(a), int(b)) for a, b in (p.split(":") for p in str(spec).replace(" ", "").split(",")))
+            self.budget = sched
+        ks = [self.budget] if isinstance(self.budget, int) else [k for _, k in (self.budget or [])]
+        for k in ks:
+            self.compressor(torch.zeros(1, self.x_embedder.num_patches, self.pos_embed.shape[-1],
+                                        device=self.pos_embed.device), k)   # fails early on a bad K
+        return self
+
+    def _budget_at(self, t):
+        if self.budget is None or isinstance(self.budget, int):
+            return self.budget
+        t0 = float(t.flatten()[0])
+        for thr, k in self.budget:
+            if t0 <= thr:
+                return k
+        return self.budget[-1][1]
+
+    # ------------------------------------------------------------------ forward pieces
+    def _embed(self, x, t, y):
+        b, _, h, w = x.shape
+        hx = None
+        if self.use_detailer:
+            hx = rearrange(x, "b c (h p) (w q) -> (b h w) c p q", p=self.patch_size, q=self.patch_size)
+            hx = rearrange(self.pool(hx), "(b h w) c p q -> b (h p w q) c", h=h//self.patch_size, w=w//self.patch_size)
+        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+        c = self.t_embedder(t) + self.y_embedder(y, self.training)   # (N, D)
+        return x, c, hx
+
+    def _bottleneck(self, x, c, num_queries=None):
+        """compress -> middle blocks on the short sequence -> decompress -> fuse with the skip."""
+        r = x
+        L = x.shape[1]
+        z = self.compressor(x) if num_queries is None else self.compressor(x, num_queries)
+        aux = None
+        # [aux #1] decode r straight back from the compressed tokens (bypassing the
+        # transformer blocks) so compressor+decompressor form an autoencoder pair whose
+        # bottleneck must retain reconstructable detail. Target is detached. Train-only.
+        if self.training and self.aux_recon:
+            aux = self.aux_recon_weight * nn.functional.mse_loss(self.decompressor(z, L), r.detach())
+        for block in self.blocks[self.layer_landmarks[0]:self.layer_landmarks[1]]:
+            z = block(z, c)
+        z = self.decompressor(z, L)
+        return self.fuser(torch.cat([r, z], dim=-1)), aux
+
+    def _nested_bottleneck(self, x, c, t):
+        """Training with several budgets: the batch is split into len(budgets) equal groups and
+        each group runs the bottleneck with its own K. Group sizes are fixed, so shapes are
+        static. uniform: random groups. time: ranked by t, the noisiest group (small t) gets the
+        fewest tokens. time_rev: the opposite (control)."""
+        B = x.shape[0]
+        if self.budget_mode == "uniform":
+            perm = torch.randperm(B, device=x.device)
+        else:
+            key = t.float()
+            if self.budget_jitter > 0:
+                key = key + self.budget_jitter * torch.randn_like(key)
+            perm = torch.argsort(key, descending=(self.budget_mode == "time_rev"))
+        outs = [self._bottleneck(x[idx], c[idx], k)[0]
+                for idx, k in zip(torch.tensor_split(perm, len(self.query_budgets)), self.query_budgets)]
+        return torch.cat(outs, dim=0)[torch.argsort(perm)]
+
+    def _tail(self, x, c, hx, start):
+        for block in self.blocks[start:]:
+            x = block(x, c)
+        if self.use_detailer:
+            x = self.detailer(torch.cat([x, hx], dim=-1))
+        x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
+        return self.unpatchify(x)                 # (N, out_channels, H, W)
+
+    def forward(self, x, t, y, num_queries=None):
         """
         Forward pass of SiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
+        num_queries: bottleneck tokens for this call (overrides training budgets / set_budget)
         """
-        b, _, h, w = x.shape
-        hx = rearrange(x, "b c (h p) (w q) -> (b h w) c p q", p=self.patch_size, q=self.patch_size)
-        hx = rearrange(self.pool(hx), "(b h w) c p q -> b (h p w q) c", h=h//self.patch_size, w=w//self.patch_size)
-        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
-        c = t + y                                # (N, D)
+        x, c, hx = self._embed(x, t, y)
+        if not self.compress:
+            return self._tail(x, c, hx, 0)
+        for block in self.blocks[:self.layer_landmarks[0]]:
+            x = block(x, c)
         aux_recon_loss = None
-        for i, block in enumerate(self.blocks):
-            if i == self.layer_landmarks[0]:
-                r = x
-                B, L, D = x.shape
-                x = self.compressor(x)
-                # [aux #1] decode r straight back from the compressed tokens (bypassing
-                # the transformer blocks) so compressor+decompressor form an autoencoder
-                # pair whose bottleneck must retain reconstructable detail. Target is
-                # detached: preserve whatever the early blocks produced, don't collapse r
-                # into something trivially compressible. Train-only (no sampling cost).
-                if self.training and self.aux_recon:
-                    aux_recon_loss = self.aux_recon_weight * nn.functional.mse_loss(
-                        self.decompressor(x, L), r.detach())
-
-            if i == self.layer_landmarks[1]:
-                x = self.decompressor(x, L)
-                x = torch.cat([r, x], dim=-1)
-                x = self.fuser(x)
-            x = block(x, c)                      # (N, T, D)
-        x = self.detailer(torch.cat([x, hx], dim=-1))
-        x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        if num_queries is None and self.training and self.query_budgets:
+            x = self._nested_bottleneck(x, c, t)
+        else:
+            if num_queries is None and not self.training:
+                num_queries = self._budget_at(t)
+            x, aux_recon_loss = self._bottleneck(x, c, num_queries)
+        x = self._tail(x, c, hx, self.layer_landmarks[1])
         if aux_recon_loss is not None:
             return x, aux_recon_loss
         return x
+
+    def forward_with_weak_guidance(self, x, t, y, guidance_scale, weak_queries):
+        """Guide the model with a cheaper version of itself (fewer bottleneck tokens), no
+        unconditional pass: out = weak + s * (full - weak). The blocks before the compressor
+        are shared, so the extra cost is only the short middle and the tail."""
+        x, c, hx = self._embed(x, t, y)
+        for block in self.blocks[:self.layer_landmarks[0]]:
+            x = block(x, c)
+        outs = []
+        for k in (self._budget_at(t), weak_queries):
+            z, _ = self._bottleneck(x, c, k)
+            outs.append(self._tail(z, c, hx, self.layer_landmarks[1]))
+        full, weak = outs
+        return weak + guidance_scale * (full - weak)
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         """
@@ -494,11 +626,9 @@ class SiT(nn.Module):
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
         model_out = self.forward(combined, t, y)
-        # For exact reproducibility reasons, we apply classifier-free guidance on only
-        # three channels by default. The standard approach to cfg applies it to all channels.
-        # This can be done by uncommenting the following line and commenting-out the line following that.
-        # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
-        eps, rest = model_out[:, :3], model_out[:, 3:]
+        # Guidance on every latent channel. (Upstream guides only the first 3 to reproduce its
+        # released checkpoint; for models trained here that leaves the 4th channel unguided.)
+        eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)

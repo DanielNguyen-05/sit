@@ -1,4 +1,17 @@
-# v2: what changed from the files in the parent folder
+# What changed from upstream SiT
+
+Written when this code lived in `v2/`; file names below are updated to the current layout
+(`scripts/`, `tools/`, see the README). Paths: `paths.py` and `scripts/env.sh`.
+
+## Layout refactor (Nov 2026)
+- `v2/` became the repository root; the pre-fix code that sat next to it was removed (it is in git
+  history before the `refactor-layout` branch).
+- Data in `data/`, runs in `results/`, Slurm logs in `logs/`, FID files in `fid_ref/`, all relative to
+  the repository. `scripts/migrate_layout.sh` moves an old copy.
+- `run.sh` -> `scripts/train.sh`; all Slurm scripts are submitted from the repository root.
+- `train.py --data-path`, `--results-dir`, `eval_fid.py --ref-stats` and the VAE now default to the
+  repository folders; `repack_latents.py` takes `--src/--dst` instead of hard-coded paths.
+- `fid_ref/vae_path.txt` is no longer used (the VAE is always `fid_ref/sd-vae-ft-ema`).
 
 Unchanged copies: `dataset.py`, `repack_latents.py`, `transport/`.
 
@@ -33,8 +46,8 @@ Unchanged copies: `dataset.py`, `repack_latents.py`, `transport/`.
 - The architecture is rebuilt from the args stored in the checkpoint. Checkpoints written by the
   old `train.py` are treated as `legacy_residual=True`.
 
-## run.sh
-- Slurm script: `sbatch run.sh baseline|method|legacy [train.py flags]`. Usage is at the top of
+## scripts/train.sh (was run.sh)
+- Slurm script: `sbatch scripts/train.sh baseline|method|legacy [train.py flags]`. Usage is at the top of
   the file.
 
 ## Environment
@@ -42,14 +55,14 @@ Unchanged copies: `dataset.py`, `repack_latents.py`, `transport/`.
   current release (0.41) cannot be imported with torch 2.5.1, and `train.py` imports diffusers.
 
 ## Data preparation (only if latents.npy / labels.npy are missing)
-- `encode_latents.py`, `encode.sh`, `download_shards.py`: build the two files from the Hugging
+- `tools/encode_latents.py`, `scripts/encode.sh`, `tools/download_shards.py`: build the two files from the Hugging
   Face ImageNet-1k parquet shards, one shard at a time.
 
 ## FID
-- `prepare_fid.sh` (login node, once): installs pytorch-fid, puts the Inception weights and the VAE
+- `scripts/prepare_fid.sh` (login node, once): installs pytorch-fid, puts the Inception weights and the VAE
   in `fid_ref/` (not `~/.cache`, which the server cleans), and keeps only mu / sigma (~34MB) of
   OpenAI's ADM ImageNet-256 reference batch.
-- `eval_fid.py` + `fid.sh`: FID-50K computed in memory (no images written). Defaults = the SiT
+- `eval_fid.py` + `scripts/fid.sh`: FID-50K computed in memory (no images written). Defaults = the SiT
   paper's 400K setting: SDE Euler-Maruyama, 250 steps, no CFG, 50k samples. Same seeds for every
   checkpoint. One JSON per checkpoint in `results/<exp>/fid/`.
 - The Fréchet distance is written out in `eval_fid.py` (pytorch-fid 0.3.0 calls a scipy function
@@ -57,20 +70,20 @@ Unchanged copies: `dataset.py`, `repack_latents.py`, `transport/`.
   and against itself (own statistics as reference gives 0.00).
 
 ## Paper tables and figures
-- `bench_cost.py` + `bench.sh`: cost table, baseline vs method on one GPU: parameters, forward
+- `bench_cost.py` + `scripts/bench.sh`: cost table, baseline vs method on one GPU: parameters, forward
   GFLOPs (DiT convention; baseline S/B/L/XL give 6.05 / 23.00 / 80.69 / 118.62, matching DiT),
   training it/s and peak memory for a real train step, sampling speed at 250 NFE.
-- `plot_fid.py`: FID vs training steps and vs GPU hours from the `results/*/fid/*.json` files,
+- `tools/plot_fid.py`: FID vs training steps and vs GPU hours from the `results/*/fid/*.json` files,
   PDF + PNG + CSV, and the speed-up at equal FID / FID gap at equal time.
 
 ## Not tested here
 Tested on CPU only, with fake latents, under torch 2.5.1 / timm 1.0.30 / diffusers 0.35.2 /
 Python 3.12: train, kill and resume, 2-process DDP for every variant (baseline, V1, V1 + aux,
 V2, V3), fp16 and bf16 autocast (CPU autocast), `torch.compile` (CPU backend), checkpoint loading
-in the samplers, and `run.sh` end to end with a simulated time-limit signal.
+in the samplers, and `scripts/train.sh` end to end with a simulated time-limit signal.
 
 Not run: real GPUs (CUDA autocast, GradScaler on real fp16 gradients, throughput), real Slurm,
-and the Hugging Face download in `encode_latents.py`.
+and the Hugging Face download in `tools/encode_latents.py`.
 
 ## Token budgets (nested queries)
 
@@ -87,9 +100,9 @@ One model, several bottleneck sizes. Old checkpoints and old commands behave exa
 - `eval_fid.py`: `--num-queries 32` or a schedule `--num-queries 0.34:8,0.5:16,0.66:32,1:64`
   (t=0 noise, t=1 data), `--weak-queries 16 --guidance-scale 1.5`. Results go to
   `results/<exp>/fid_budget/`, separate from `fid/`.
-- `budget_table.py`: prints all `fid_budget` results as a table.
+- `tools/budget_table.py`: prints all `fid_budget` results as a table.
 
 Train (S/2):
 
-    EXP=nested_uniform sbatch --job-name=nest_uni  --exclude=gpu02,gpu04 run.sh method --query-budgets 8,16,32,64 --budget-mode uniform --ckpt-every 25000
-    EXP=nested_time    sbatch --job-name=nest_time --exclude=gpu02,gpu04 run.sh method --query-budgets 8,16,32,64 --budget-mode time --ckpt-every 25000
+    EXP=nested_uniform sbatch --job-name=nest_uni  --exclude=gpu02,gpu04 scripts/train.sh method --query-budgets 8,16,32,64 --budget-mode uniform --ckpt-every 25000
+    EXP=nested_time    sbatch --job-name=nest_time --exclude=gpu02,gpu04 scripts/train.sh method --query-budgets 8,16,32,64 --budget-mode time --ckpt-every 25000

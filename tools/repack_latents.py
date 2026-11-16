@@ -10,15 +10,16 @@ Output: <DST>/latents.npy  (N,8,32,32) fp32 memmap   (only the [0] aug slice, wh
 
 Reads/writes disjoint index ranges from parallel workers straight into the memmap
 (safe: no overlapping writes). ~55 min for 1.28M files on 20 cores.
+
+Only needed for the old per-image .npz layout; tools/encode_latents.py writes latents.npy directly.
+
+    python tools/repack_latents.py --src /path/to/latent_npz_tree --dst data
 """
-import os, glob, sys
+import argparse, os, glob, sys
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 
-SRC = "/run/media/hoang/ssd/imagenet/latent/"
-DST = "/run/media/hoang/ssd/imagenet/latent_memmap/"
-NWORK = 20
 
 
 def worker(rng, lat_path, lab_path, files):
@@ -34,6 +35,12 @@ def worker(rng, lat_path, lab_path, files):
 
 
 def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--src", required=True, help="Folder with the per-image .npz files (searched recursively).")
+    p.add_argument("--dst", required=True, help="Output folder for latents.npy / labels.npy (= train.py --data-path).")
+    p.add_argument("--workers", type=int, default=20)
+    a = p.parse_args()
+    SRC, DST, NWORK = a.src, a.dst, a.workers
     os.makedirs(DST, exist_ok=True)
     files = sorted(glob.glob(os.path.join(SRC, "**/*.npz"), recursive=True))
     N = len(files)

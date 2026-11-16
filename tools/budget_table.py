@@ -1,10 +1,12 @@
 """Print every budget FID result of one or more runs as a table.
-    python budget_table.py results/nested_uniform results/nested_time
+    python tools/budget_table.py                                   # every run in <repo>/results
+    python tools/budget_table.py results/nested_uniform results/nested_time
 Reads results/<exp>/fid_budget/*.json written by eval_fid.py --num-queries / --weak-queries."""
 import glob, json, os, sys
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tools/ -> repository root
 
 rows = []
-for run in sys.argv[1:] or ["results/*"]:
+for run in sys.argv[1:] or [os.path.join(REPO, "results", "*")]:
     for f in sorted(glob.glob(os.path.join(run, "fid_budget", "*.json"))):
         r = json.load(open(f))
         rows.append((os.path.basename(os.path.dirname(os.path.dirname(f))), r.get("budget_mode") or "-",

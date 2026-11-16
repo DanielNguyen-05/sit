@@ -4,8 +4,7 @@ Inception-v3 and reduced to running sums on the GPU. No image is written to disk
 small JSON per checkpoint.
 
     torchrun --standalone --nproc_per_node=1 eval_fid.py \
-        --ckpt results/baseline/checkpoints/0400000.pt results/method/checkpoints/0400000.pt \
-        --ref-stats /media/ltnghia33/sit/fid_ref/VIRTUAL_imagenet256_labeled_stats.npz
+        --ckpt results/baseline/checkpoints/0400000.pt results/method/checkpoints/0400000.pt
 
 Defaults follow the SiT paper's 400K-step numbers (SiT-S/2 = 57.6): SDE Euler-Maruyama, 250 steps,
 no classifier-free guidance, 50,000 samples, class labels drawn uniformly, SD-VAE ft-EMA decoder,
@@ -32,6 +31,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 from download import find_model_and_args
+import paths
 from models import SiT_models
 from train_utils import model_kwargs_from_args, apply_checkpoint_args, parse_transport_args
 from transport import create_transport, Sampler
@@ -208,7 +208,7 @@ def main(args):
 
     from diffusers.models import AutoencoderKL
     from pytorch_fid.inception import InceptionV3
-    vae = AutoencoderKL.from_pretrained(args.vae if os.path.isdir(args.vae) else f"stabilityai/sd-vae-ft-{args.vae}").to(device).eval()
+    vae = AutoencoderKL.from_pretrained(paths.vae_source(args.vae)).to(device).eval()
     inception = InceptionV3([InceptionV3.BLOCK_INDEX_BY_DIM[2048]], resize_input=True, normalize_input=True).to(device).eval()
 
     for ckpt in args.ckpt:
@@ -233,7 +233,8 @@ def main(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", type=str, nargs="+", required=True, help="One or more train.py checkpoints (EMA weights are used).")
-    p.add_argument("--ref-stats", type=str, required=True, help="npz with mu (2048,) and sigma (2048, 2048).")
+    p.add_argument("--ref-stats", type=str, default=paths.REF_STATS,
+                   help="npz with mu (2048,) and sigma (2048, 2048). Default: <repo>/fid_ref/ (scripts/prepare_fid.sh).")
     p.add_argument("--out", type=str, default=None, help="Result JSON (single checkpoint only). Default: results/<exp>/fid/<step>_<settings>.json")
     p.add_argument("--num-samples", type=int, default=50_000)
     p.add_argument("--per-proc-batch-size", type=int, default=250)

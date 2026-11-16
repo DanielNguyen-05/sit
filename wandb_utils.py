@@ -1,4 +1,7 @@
-import wandb
+try:
+    import wandb
+except ImportError:   # only needed when training with --wandb
+    wandb = None
 import torch
 from torchvision.utils import make_grid
 import torch.distributed as dist
@@ -25,6 +28,7 @@ def generate_run_id(exp_name):
 
 
 def initialize(args, entity, exp_name, project_name):
+    assert wandb is not None, "--wandb was given but the wandb package is not installed"
     config_dict = namespace_to_dict(args)
     wandb.login(key=os.environ["WANDB_KEY"])
     wandb.init(

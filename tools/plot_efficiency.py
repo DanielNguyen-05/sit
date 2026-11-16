@@ -6,12 +6,13 @@ Two summary figures for the paper, from numbers already measured (edit the dicts
   cost_quality     : FID-50K against training GPU hours: each run at 400K steps, plus the baseline at the
                      method's training time (interpolated between its own scored checkpoints).
 
-    python plot_efficiency.py            # -> results/figures/efficiency_gains.pdf/.png, cost_quality.pdf/.png
+    python tools/plot_efficiency.py            # -> results/figures/efficiency_gains.pdf/.png, cost_quality.pdf/.png
 
 Sources: bench_cost.py on gpu03 (A100-PCIe 40GB, batch 256, bf16, compile) = job 79116; FID-50K from
 eval_fid.py (SDE Euler 250 steps, no CFG); training it/s = median of each run's own log on gpu02/gpu03.
 """
 import os
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tools/ -> repository root
 
 import numpy as np
 
@@ -153,7 +154,7 @@ if __name__ == "__main__":
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     style(plt)
-    out = "results/figures"
+    out = os.path.join(REPO, "results", "figures")
     os.makedirs(out, exist_ok=True)
     efficiency_gains(plt, out)
     cost_quality(plt, out)

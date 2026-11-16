@@ -2,8 +2,8 @@
 Training loss of two or more runs, against training steps (a) and against training time (b),
 read straight from the Slurm logs (logs/<job>.err, the "(step=...) Train Loss: ..." lines).
 
-    python plot_loss.py --run "SiT-S/2=logs/base_78522.err" --run "SiT-S/2 + ours=logs/method_78588.err" --name loss_S2
-    python plot_loss.py --run "SiT-B/2=logs/base_B2_79033.err" --run "SiT-B/2 + ours=logs/method_B2_79034.err" --name loss_B2
+    python tools/plot_loss.py --run "SiT-S/2=logs/base_78522.err" --run "SiT-S/2 + ours=logs/method_78588.err" --name loss_S2
+    python tools/plot_loss.py --run "SiT-B/2=logs/base_B2_79033.err" --run "SiT-B/2 + ours=logs/method_B2_79034.err" --name loss_B2
 
 The loss is logged every 100 steps and is noisy, so it is drawn as a trailing mean over --window steps.
 Training time = steps / the run's median logged it/s (steady-state GPU hours; the first epoch reads the
@@ -16,6 +16,7 @@ equal training time.
 import argparse
 import csv
 import os
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tools/ -> repository root
 import re
 
 import numpy as np
@@ -119,6 +120,6 @@ if __name__ == "__main__":
     p.add_argument("--window", type=int, default=10_000, help="Trailing-mean window in steps.")
     p.add_argument("--start", type=int, default=10_000, help="First step drawn (the first steps are far above the rest).")
     p.add_argument("--width", type=float, default=7.0)
-    p.add_argument("--out-dir", default="results/figures")
+    p.add_argument("--out-dir", default=os.path.join(REPO, "results", "figures"))
     p.add_argument("--name", default="loss")
     main(p.parse_args())

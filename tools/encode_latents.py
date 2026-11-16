@@ -9,11 +9,11 @@ Source: the parquet shards of the Hugging Face dataset ILSVRC/imagenet-1k
 Shards are handled one at a time, so the full 147GB never has to sit on disk:
 
     # download each shard, encode it, delete it  (needs internet where this runs)
-    python encode_latents.py --out /media/ltnghia33/sit --src /media/ltnghia33/imagenet_parquet \
+    python tools/encode_latents.py --out data --src /path/to/imagenet_parquet \
         --hf-download --delete-shards
 
-    # shards are already (or are being) downloaded by something else, e.g. download_shards.sh
-    python encode_latents.py --out /media/ltnghia33/sit --src /media/ltnghia33/imagenet_parquet \
+    # shards are already (or are being) downloaded by something else, e.g. tools/download_shards.py
+    python tools/encode_latents.py --out data --src /path/to/imagenet_parquet \
         --wait --delete-shards
 
 Safe to interrupt: finished shards are recorded in <out>/encode_progress.json and skipped on the

@@ -1,169 +1,106 @@
-## Exploring Flow and Diffusion-based Generative Models with Scalable Interpolant Transformers (SiT)<br><sub>Official PyTorch Implementation</sub>
+# SiT + token compression
 
-### [Paper](https://arxiv.org/pdf/2401.08740.pdf) | [Project Page](https://scalable-interpolant.github.io/) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](http://colab.research.google.com/github/willisma/SiT/blob/main/run_SiT.ipynb)
+SiT (flow-matching transformer, ImageNet 256×256 latents) with a Q-Former–style token bottleneck:
+the first and last `depth/6` blocks run on all 256 tokens; the middle blocks run on 32 compressed
+tokens (pool branch + learned queries), which a Perceiver-IO decompressor maps back to 256 tokens.
+Optional nested query budgets (8/16/32/64) train one model for several bottleneck sizes.
+Details of every change from upstream SiT: [docs/CHANGES.md](docs/CHANGES.md).
 
-![SiT samples](visuals/visual.png)
+## Layout
 
-This repo contains PyTorch model definitions, pre-trained weights and training/sampling code for our paper exploring 
-interpolant models with scalable transformers (SiTs). 
+```
+.                         repository root = /media/ltnghia33/sit on the cluster
+├── models.py             SiT, compressor (V1/V2/V3), decompressor, token budgets
+├── transport/            flow-matching interpolants, losses, ODE/SDE samplers (upstream SiT)
+├── dataset.py            MemmapLatentDataset (data/latents.npy + labels.npy)
+├── train.py              training (DDP, resume, AMP, EMA milestones)
+├── eval_fid.py           FID-50K in memory, one JSON per checkpoint
+├── sample.py, sample_ddp.py   image samples / sample folders
+├── bench_cost.py         params, GFLOPs, train/sample speed, memory
+├── paths.py              every default folder (Python side)
+├── train_utils.py, download.py, wandb_utils.py
+├── scripts/              Slurm and shell entry points
+│   ├── env.sh            THE ONLY FILE WITH MACHINE-SPECIFIC PATHS (conda, data, ...)
+│   ├── train.sh          sbatch scripts/train.sh {baseline|method|legacy} [train.py flags]
+│   ├── fid.sh            sbatch scripts/fid.sh <ckpt.pt> ...
+│   ├── bench.sh          cost table
+│   ├── prepare_fid.sh    one-time: FID reference stats, Inception, SD-VAE -> fid_ref/
+│   ├── encode.sh         one-time: ImageNet -> data/latents.npy, data/labels.npy
+│   └── migrate_layout.sh one-time: old v2/ layout -> this one
+├── tools/                no GPU needed
+│   ├── plot_fid.py, plot_loss.py, plot_efficiency.py, budget_table.py   paper figures / tables
+│   └── encode_latents.py, download_shards.py, repack_latents.py         data preparation
+├── docs/CHANGES.md
+│
+│   not in git (see .gitignore):
+├── data/                 latents.npy (42GB), labels.npy
+├── fid_ref/              VIRTUAL_imagenet256_labeled_stats.npz, torch/ (Inception), sd-vae-ft-ema/
+├── results/<exp>/        checkpoints/, fid/, fid_budget/, log.txt     results/figures/, results/bench/
+├── logs/                 Slurm .out / .err
+└── pretrained_models/    released SiT-XL/2 weights (only for sample.py without --ckpt)
+```
 
-> [**Exploring Flow and Diffusion-based Generative Models with Scalable Interpolant Transformers**](https://arxiv.org/pdf/2401.08740.pdf)<br>
-> [Nanye Ma](https://willisma.github.io), [Mark Goldstein](https://marikgoldstein.github.io/), [Michael Albergo](http://malbergo.me/), [Nicholas Boffi](https://nmboffi.github.io/), [Eric Vanden-Eijnden](https://wp.nyu.edu/courantinstituteofmathematicalsciences-eve2/), [Saining Xie](https://www.sainingxie.com)
-> <br>New York University<br>
-
-We present Scalable Interpolant Transformers (SiT), a family of generative models built on the backbone of Diffusion Transformers (DiT). The interpolant framework, which allows for connecting two distributions in a more flexible way than standard diffusion models, makes possible a modular study of various design choices impacting generative models built on dynamical transport: using discrete vs. continuous time learning, deciding the model to learn, choosing the interpolant connecting the distributions, and deploying a deterministic or stochastic sampler. By carefully introducing the above ingredients, SiT surpasses DiT uniformly across model sizes on the conditional ImageNet 256x256 benchmark using the exact same backbone, number of parameters, and GFLOPs. By exploring various diffusion coefficients, which can be tuned separately from learning, SiT achieves an FID-50K score of 2.06.
-
-This repository contains:
-
-* 🪐 A simple PyTorch [implementation](models.py) of SiT
-* ⚡️ Pre-trained class-conditional SiT models trained on ImageNet 256x256
-* 🛸 A SiT [training script](train.py) using PyTorch DDP
+**Every command is run from the repository root.** Python defaults come from `paths.py`, shell
+defaults from `scripts/env.sh`; both resolve folders relative to the repository, so nothing breaks
+when the repository is cloned somewhere else. To put data or results elsewhere, set
+`DATA=`, `RESULTS=`, `FID_REF=` (shell) or `SIT_DATA`, `SIT_RESULTS`, `SIT_FID_REF` (Python).
 
 ## Setup
 
-First, download and set up the repo:
-
 ```bash
-git clone https://github.com/willisma/SiT.git
-cd SiT
+conda create -n sit python=3.12 -y && conda activate sit
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt          # diffusers must stay at 0.35.2 with torch 2.5
 ```
 
-We provide an [`environment.yml`](environment.yml) file that can be used to create a Conda environment. If you only want 
-to run pre-trained models locally on CPU, you can remove the `cudatoolkit` and `pytorch-cuda` requirements from the file.
+On a new machine, edit `CONDA_SH` (and `PARQUET` if you encode data) in `scripts/env.sh`.
+
+One-time data (skip what already exists):
 
 ```bash
-conda env create -f environment.yml
-conda activate SiT
+sbatch scripts/encode.sh                  # -> data/latents.npy, data/labels.npy
+bash scripts/prepare_fid.sh               # login node, needs internet -> fid_ref/
 ```
 
-
-## Sampling [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://github.com/willisma/SiT/blob/main/run_SiT.ipynb)
-![More SiT samples](visuals/visual_2.png)
-
-**Pre-trained SiT checkpoints.** You can sample from our pre-trained SiT models with [`sample.py`](sample.py). Weights for our pre-trained SiT model will be 
-automatically downloaded depending on the model you use. The script has various arguments to adjust sampler configurations (ODE & SDE), sampling steps, change the classifier-free guidance scale, etc. For example, to sample from
-our 256x256 SiT-XL model with default ODE setting, you can use:
+## Experiments
 
 ```bash
-python sample.py ODE --image-size 256 --seed 1
+cd /media/ltnghia33/sit                   # repository root
+
+# training (resubmitting the same command resumes from results/<EXP>/checkpoints/latest.pt)
+sbatch --job-name=base   scripts/train.sh baseline
+sbatch --job-name=method scripts/train.sh method
+MODEL=SiT-B/2 EXP=method_B2 sbatch scripts/train.sh method
+EXP=nested_time sbatch scripts/train.sh method --query-budgets 8,16,32,64 --budget-mode time --ckpt-every 25000
+DRY_RUN=1 bash scripts/train.sh method    # print the command only
+SMOKE=1  bash scripts/train.sh method     # 200 steps, inside an interactive GPU session
+
+# FID-50K (JSON in results/<exp>/fid/)
+sbatch scripts/fid.sh results/method/checkpoints/0*.pt
+FID_ARGS="--num-samples 10000 --num-queries 32" sbatch scripts/fid.sh results/nested_time/checkpoints/0400000.pt
+
+# cost table, figures, tables
+sbatch --nodelist=gpu03 scripts/bench.sh
+python tools/plot_fid.py
+python tools/plot_loss.py --run "SiT-S/2=logs/base_78522.err" --run "SiT-S/2 + ours=logs/method_78588.err" --name loss_S2
+python tools/plot_efficiency.py
+python tools/budget_table.py
 ```
 
-For convenience, our pre-trained SiT models can be downloaded directly here as well:
+## Moving an old copy (code in `v2/`) to this layout
 
-| SiT Model     | Image Resolution | FID-50K | Inception Score | Gflops | 
-|---------------|------------------|---------|-----------------|--------|
-| [XL/2](https://www.dl.dropboxusercontent.com/scl/fi/as9oeomcbub47de5g4be0/SiT-XL-2-256.pt?rlkey=uxzxmpicu46coq3msb17b9ofa&dl=0) | 256x256          | 2.06    | 270.27         | 119    |
-<!-- | [XL/2](https://dl.fbaipublicfiles.com/SiT/models/SiT-XL-2-512x512.pt) | 512x512          | 2.62    |   252.21       | 525    | -->
-
-
-**Custom SiT checkpoints.** If you've trained a new SiT model with [`train.py`](train.py) (see [below](#training-SiT)), you can add the `--ckpt`
-argument to use your own checkpoint instead. For example, to sample from the EMA weights of a custom 
-256x256 SiT-L/4 model with ODE sampler, run:
+No job may be running. On the cluster:
 
 ```bash
-python sample.py ODE --model SiT-L/4 --image-size 256 --ckpt /path/to/model.pt
+cd /media/ltnghia33/sit
+git pull
+bash scripts/migrate_layout.sh            # dry run: lists every move
+APPLY=1 bash scripts/migrate_layout.sh    # latents/labels -> data/, v2/results -> results/, v2/logs -> logs/
 ```
 
-### Advanced sampler settings
+Checkpoints and FID JSON files need no change: runs are found by folder name, and the absolute
+paths stored inside old JSON files are only metadata.
 
-|     |          |          |                         |
-|-----|----------|----------|--------------------------|
-| ODE | `--atol` | `float` |  Absolute error tolerance |
-|     | `--rtol` | `float` | Relative error tolenrace |   
-|     | `--sampling-method` | `str` | Sampling methods (refer to [`torchdiffeq`](https://github.com/rtqichen/torchdiffeq) ) |
+## Credits
 
-|     |          |          |                         |
-|-----|----------|----------|--------------------------|
-| SDE | `--diffusion-form` | `str` | Form of SDE's diffusion coefficient (refer to Tab. 2 in [paper]()) |
-|     | `--diffusion-norm` | `float` | Magnitude of SDE's diffusion coefficient |
-|     | `--last-step` | `str` | Form of SDE's last step |
-|     |               |       | None - Single SDE integration step |
-|     |               |       | "Mean" - SDE integration step without diffusion coefficient |
-|     |               |       | "Tweedie" - [Tweedie's denoising](https://efron.ckirby.su.domains/papers/2011TweediesFormula.pdf) step | 
-|     |               |       | "Euler" - Single ODE integration step
-|     | `--sampling-method` | `str` | Sampling methods |
-|     |               |       | "Euler" - First order integration | 
-|     |               |       | "Heun" - Second order integration | 
-
-There are some more options; refer to [`train_utils.py`](train_utils.py) for details.
-
-## Training SiT
-
-We provide a training script for SiT in [`train.py`](train.py). To launch SiT-XL/2 (256x256) training with `N` GPUs on 
-one node:
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=N train.py --model SiT-XL/2 --data-path /path/to/imagenet/train
-```
-
-**Logging.** To enable `wandb`, firstly set `WANDB_KEY`, `ENTITY`, and `PROJECT` as environment variables:
-
-```bash
-export WANDB_KEY="key"
-export ENTITY="entity name"
-export PROJECT="project name"
-```
-
-Then in training command add the `--wandb` flag:
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=N train.py --model SiT-XL/2 --data-path /path/to/imagenet/train --wandb
-```
-
-**Interpolant settings.** We also support different choices of interpolant and model predictions. For example, to launch SiT-XL/2 (256x256) with `Linear` interpolant and `noise` prediction: 
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=N train.py --model SiT-XL/2 --data-path /path/to/imagenet/train --path-type Linear --prediction noise
-```
-
-**Resume training.** To resume training from custom checkpoint:
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=N train.py --model SiT-L/2 --data-path /path/to/imagenet/train --ckpt /path/to/model.pt
-```
-
-**Caution.** Resuming training will automatically restore both model, EMA, and optimizer states and training configs to be the same as in the checkpoint.
-
-## Evaluation (FID, Inception Score, etc.)
-
-We include a [`sample_ddp.py`](sample_ddp.py) script which samples a large number of images from a SiT model in parallel. This script 
-generates a folder of samples as well as a `.npz` file which can be directly used with [ADM's TensorFlow
-evaluation suite](https://github.com/openai/guided-diffusion/tree/main/evaluations) to compute FID, Inception Score and
-other metrics. For example, to sample 50K images from our pre-trained SiT-XL/2 model over `N` GPUs under default ODE sampler settings, run:
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=N sample_ddp.py ODE --model SiT-XL/2 --num-fid-samples 50000
-```
-
-**Likelihood.** Likelihood evaluation is supported. To calculate likelihood, you can add the `--likelihood` flag to ODE sampler:
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=N sample_ddp.py ODE --model SiT-XL/2 --likelihood
-```
-
-Notice that only under ODE sampler likelihood can be calculated; see [`sample_ddp.py`](sample_ddp.py) for more details and settings. 
-
-### Enhancements
-Training (and sampling) could likely be speed-up significantly by:
-- [ ] using [Flash Attention](https://github.com/HazyResearch/flash-attention) in the SiT model
-- [ ] using `torch.compile` in PyTorch 2.0
-
-Basic features that would be nice to add:
-- [ ] Monitor FID and other metrics
-- [ ] AMP/bfloat16 support
-
-Precision in likelihood calculation could likely be improved by:
-- [ ] Uniform / Gaussian Dequantization
-
-
-## Differences from JAX
-
-Our models were originally trained in JAX on TPUs. The weights in this repo are ported directly from the JAX models. 
-There may be minor differences in results stemming from sampling on different platforms (TPU vs. GPU). We observed that sampling on TPU performs marginally worse than GPU (2.15 FID 
-versus 2.06 in the paper).
-
-
-## License
-This project is under the MIT license. See [LICENSE](LICENSE.txt) for details.
-
-
+Built on [SiT](https://github.com/willisma/SiT) (Ma et al., 2024), MIT license (LICENSE.txt).
