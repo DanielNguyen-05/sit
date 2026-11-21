@@ -83,7 +83,9 @@ def default_out(ckpt, args):
         sub = "fid_budget"
         tag += "-q" + str(args.num_queries or "max").replace(":", "_").replace(",", "+")
         if args.weak_queries is not None:
-            tag += f"-weak{args.weak_queries}-g{args.guidance_scale}"
+            tag += f"-weak{args.weak_queries}-g{args.guidance_scale}" + ("-uncond" if args.weak_uncond else "")
+    if args.guidance_interval:
+        tag += "-int" + args.guidance_interval.replace(",", "_")
     return os.path.join(run_dir, sub, f"{name}_{tag}.json")
 
 
@@ -117,6 +119,9 @@ def evaluate(ckpt, args, rank, world, device, vae, inception, ref_mu, ref_sigma,
     if args.num_queries is not None or use_weak:
         assert margs.compress, "--num-queries / --weak-queries need a model with the compressor"
         model.set_budget(args.num_queries)
+    interval = tuple(float(v) for v in args.guidance_interval.split(",")) if args.guidance_interval else None
+    assert interval is None or (len(interval) == 2 and interval[0] <= interval[1]), "--guidance-interval lo,hi"
+    assert interval is None or use_cfg or use_weak, "--guidance-interval needs --cfg-scale > 1 or --weak-queries"
     model_fn = model.forward_with_cfg if use_cfg else (model.forward_with_weak_guidance if use_weak else model.forward)
 
     # Same seeds for every checkpoint, so all models are scored on the same noise and labels
@@ -144,9 +149,10 @@ def evaluate(ckpt, args, rank, world, device, vae, inception, ref_mu, ref_sigma,
         if use_cfg:
             z = torch.cat([z, z], 0)
             y = torch.cat([y, torch.full_like(y, margs.num_classes)], 0)
-            kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+            kwargs = dict(y=y, cfg_scale=args.cfg_scale, interval=interval)
         elif use_weak:
-            kwargs = dict(y=y, guidance_scale=args.guidance_scale, weak_queries=args.weak_queries)
+            kwargs = dict(y=y, guidance_scale=args.guidance_scale, weak_queries=args.weak_queries,
+                          interval=interval, weak_uncond=args.weak_uncond)
         else:
             kwargs = dict(y=y)
         with torch.autocast(device.type, dtype=amp, enabled=amp is not None):
@@ -176,13 +182,15 @@ def evaluate(ckpt, args, rank, world, device, vae, inception, ref_mu, ref_sigma,
     minutes = (time.time() - t0) / 60
     result = {"ckpt": os.path.abspath(ckpt), "train_steps": train_steps, "fid": fid, "num_samples": N,
               "model": margs.model, "compress": margs.compress, "detailer": margs.detailer,
-              "legacy_residual": margs.legacy_residual, "query_len": margs.query_len,
+              "legacy_residual": margs.legacy_residual,
+              "query_len": int(model.compressor.query.shape[0]) if hasattr(getattr(model, "compressor", None), "query") else None,
               "mode": args.mode, "sampling_method": args.sampling_method,
               "num_sampling_steps": args.num_sampling_steps, "diffusion_form": args.diffusion_form,
               "last_step": args.last_step, "last_step_size": args.last_step_size, "cfg_scale": args.cfg_scale,
               "query_budgets": getattr(margs, "query_budgets", None), "budget_mode": getattr(margs, "budget_mode", None),
               "num_queries": args.num_queries, "weak_queries": args.weak_queries,
               "guidance_scale": args.guidance_scale if use_weak else None,
+              "weak_uncond": bool(args.weak_uncond) if use_weak else None, "guidance_interval": args.guidance_interval,
               "amp": args.amp, "seed": args.seed, "vae": args.vae, "ref_stats": os.path.abspath(args.ref_stats),
               "inception": "pytorch-fid pt_inception-2015-12-05", "world_size": world,
               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
@@ -255,6 +263,10 @@ if __name__ == "__main__":
     p.add_argument("--weak-queries", type=int, default=None,
                    help="Guide with the same model at this smaller budget (no unconditional pass).")
     p.add_argument("--guidance-scale", type=float, default=1.5, help="Scale for --weak-queries.")
+    p.add_argument("--weak-uncond", action="store_true",
+                   help="The weak branch also drops the class label (cheap CFG as in ELIT).")
+    p.add_argument("--guidance-interval", type=str, default=None,
+                   help="lo,hi in t (0 = noise, 1 = data): guide (CFG or weak) only there, e.g. 0.4,0.85.")
     p.add_argument("--amp", type=str, choices=["none", "bf16", "fp16"], default="none",
                    help="Autocast for the sampling network only. none (tf32) is the reference setting.")
     p.add_argument("--seed", type=int, default=0)

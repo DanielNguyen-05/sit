@@ -604,10 +604,26 @@ class SiT(nn.Module):
             return x, aux_recon_loss
         return x
 
-    def forward_with_weak_guidance(self, x, t, y, guidance_scale, weak_queries):
-        """Guide the model with a cheaper version of itself (fewer bottleneck tokens), no
-        unconditional pass: out = weak + s * (full - weak). The blocks before the compressor
-        are shared, so the extra cost is only the short middle and the tail."""
+    @staticmethod
+    def _in_interval(t, interval):
+        """interval = (lo, hi) in t (0 = noise, 1 = data); None = guide at every step."""
+        if interval is None:
+            return True
+        t0 = float(t.flatten()[0])
+        return interval[0] <= t0 <= interval[1]
+
+    def forward_with_weak_guidance(self, x, t, y, guidance_scale, weak_queries, interval=None, weak_uncond=False):
+        """Guide the model with a cheaper version of itself (fewer bottleneck tokens):
+        out = weak + s * (full - weak).
+        interval:    guide only for t in [lo, hi]; outside it a single plain forward (no extra cost).
+        weak_uncond: the weak branch also drops the class label (as ELIT's cheap CFG); otherwise the
+                     blocks before the compressor are shared and the extra cost is the middle + tail."""
+        if not self._in_interval(t, interval):
+            return self.forward(x, t, y)
+        if weak_uncond:
+            full = self.forward(x, t, y)
+            weak = self.forward(x, t, torch.full_like(y, self.y_embedder.num_classes), num_queries=weak_queries)
+            return weak + guidance_scale * (full - weak)
         x, c, hx = self._embed(x, t, y)
         for block in self.blocks[:self.layer_landmarks[0]]:
             x = block(x, c)
@@ -618,12 +634,16 @@ class SiT(nn.Module):
         full, weak = outs
         return weak + guidance_scale * (full - weak)
 
-    def forward_with_cfg(self, x, t, y, cfg_scale):
+    def forward_with_cfg(self, x, t, y, cfg_scale, interval=None):
         """
         Forward pass of SiT, but also batches the unconSiTional forward pass for classifier-free guidance.
+        interval = (lo, hi): guide only for t in [lo, hi]; outside it only the conditional half is run.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
+        if not self._in_interval(t, interval):
+            out = self.forward(half, t[: len(half)], y[: len(half)])
+            return torch.cat([out, out], dim=0)
         combined = torch.cat([half, half], dim=0)
         model_out = self.forward(combined, t, y)
         # Guidance on every latent channel. (Upstream guides only the first 3 to reproduce its
