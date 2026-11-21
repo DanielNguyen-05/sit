@@ -1,0 +1,20 @@
+# Round 2 of the self-guidance study (FID-10K, 400K checkpoints).
+# Question: is the gain from guidance, or just from using 64 instead of 32 tokens?
+# -> keep the strong branch at 32 tokens (the budget of the original method), and compare with CFG
+#    on the method's own 32-token model at the same budget.
+# Format:  label | checkpoint | eval_fid.py flags
+# Run:     sbatch --exclude=gpu04 --gres=gpu:4 --cpus-per-task=32 scripts/fid_batch.sh configs/guidance_round2.txt
+
+# self-guidance with the strong branch at 32 tokens (same budget as the original method)
+SG 32/16 s=1.5   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 32 --weak-queries 16 --guidance-scale 1.5
+SG 32/16 s=2.0   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 32 --weak-queries 16 --guidance-scale 2.0
+SG 32/8  s=2.0   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 32 --weak-queries 8 --guidance-scale 2.0
+
+# CFG at 32 tokens: the method's own model, and the nested model at K=32 (same budget, standard guidance)
+CFG method 1.5   | results/method/checkpoints/0400000.pt         | --num-samples 10000 --cfg-scale 1.5
+CFG method 2.0   | results/method/checkpoints/0400000.pt         | --num-samples 10000 --cfg-scale 2.0
+CFG nested32 1.5 | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 32 --cfg-scale 1.5
+
+# larger scale at 64 tokens, in case s = 3 (job 85230) is still improving
+SG 64/16 s=4.0   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --guidance-scale 4.0
+SG 64/16 s=2.5   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --guidance-scale 2.5
