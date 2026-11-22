@@ -5,17 +5,19 @@
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --time=2-00:00:00
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #
-# Many FID evaluations as ONE Slurm job: the configurations in a list file are split over the job's
-# GPUs and run in parallel, one process per GPU, each GPU working through its share one after the
-# other. Never submit many jobs at once (the cluster cancels them as spam). From the repository root:
+# Many FID evaluations as ONE Slurm job on ONE GPU (the cluster allows one GPU and at most 8 CPUs
+# per job, and cancels many simultaneous jobs as spam): the configurations in a list file run one
+# after the other. From the repository root:
 #
-#   sbatch --exclude=gpu04 scripts/fid_batch.sh configs/guidance_round2.txt              # 2 GPUs
-#   sbatch --exclude=gpu04 --gres=gpu:4 --cpus-per-task=32 scripts/fid_batch.sh configs/guidance_round2.txt
+#   sbatch --exclude=gpu04 scripts/fid_batch.sh configs/guidance_round3.txt
+#   sbatch --exclude=gpu04 --dependency=afterany:<jobid> scripts/fid_batch.sh configs/...   # start after another job
+#
+# (If a job is ever given several GPUs, the list is split over them automatically.)
 #
 # List file: one configuration per line,  label | checkpoint | eval_fid.py flags   ("#" = comment).
 # Resumable: a configuration whose result JSON already exists is skipped, so after a cancel or a
