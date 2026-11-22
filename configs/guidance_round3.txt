@@ -1,0 +1,23 @@
+# Round 3 (FID-10K, 400K checkpoints): compare every guidance at ITS OWN best scale.
+# Round 1 compared at one scale only; pure self-guidance and cheap CFG were still improving at the
+# largest scale tried (SG s=3 -> 37.11; CCFG s=1.5 -> 24.78), so the optimum is not found yet.
+# Format:  label | checkpoint | eval_fid.py flags
+# Run:     sbatch --exclude=gpu04 --dependency=afterany:<round-2 job id> scripts/fid_batch.sh configs/guidance_round3.txt
+#          (1 GPU, about 12-14 h; ordered by priority, resumable)
+
+# cheap CFG: strong branch 64 tokens with label, weak branch fewer tokens WITHOUT label (best so far)
+CCFG 64/16 s=2.0   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --weak-uncond --guidance-scale 2.0
+CCFG 64/16 s=2.5   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --weak-uncond --guidance-scale 2.5
+CCFG 64/16 s=1.25  | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --weak-uncond --guidance-scale 1.25
+CCFG 64/8 s=1.5    | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 8 --weak-uncond --guidance-scale 1.5
+
+# CFG at larger scales (round 1 only had 1.25 and 1.5; still improving)
+CFG nested64 2.0   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --cfg-scale 2.0
+CFG nested64 2.5   | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --cfg-scale 2.5
+CFG baseline 2.0   | results/baseline/checkpoints/0400000.pt       | --num-samples 10000 --cfg-scale 2.0
+CFG baseline 2.5   | results/baseline/checkpoints/0400000.pt       | --num-samples 10000 --cfg-scale 2.5
+
+# pure self-guidance (label kept) at larger scales: s=1.5 -> 49.6, 2 -> 44.6, 3 -> 37.1, not saturated
+SG 64/16 s=5.0     | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --guidance-scale 5.0
+SG 64/16 s=7.0     | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 16 --guidance-scale 7.0
+SG 64/8 s=3.0      | results/nested_uniform/checkpoints/0400000.pt | --num-samples 10000 --num-queries 64 --weak-queries 8 --guidance-scale 3.0
