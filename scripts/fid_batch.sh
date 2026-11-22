@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=fid_batch
 #SBATCH --partition=batch
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/sweep/%x_%j.out
+#SBATCH --error=logs/sweep/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -21,8 +21,8 @@
 #
 # List file: one configuration per line,  label | checkpoint | eval_fid.py flags   ("#" = comment).
 # Resumable: a configuration whose result JSON already exists is skipped, so after a cancel or a
-# timeout, submit the same command again. Per-configuration logs: logs/<job name>_<job id>_gpu<i>.log;
-# the summary (one FID line per configuration) is in logs/<job name>_<job id>.out.
+# timeout, submit the same command again. Per-configuration logs: logs/sweep/<job name>_<job id>_gpu<i>.log;
+# the summary (one FID line per configuration) is in logs/sweep/<job name>_<job id>.out.
 set -o pipefail
 LIST=${1:-}
 [ -n "$LIST" ] || { echo "usage: sbatch scripts/fid_batch.sh <list file>"; exit 2; }
@@ -54,7 +54,7 @@ echo "Job ${SLURM_JOB_ID:-LOCAL} on $(hostname) | $NG GPU(s): ${DEVS[*]} | ${#CO
 nvidia-smi --query-gpu=index,name --format=csv,noheader 2>/dev/null
 
 lane() {   # lane <lane index>: runs configurations lane, lane+NG, lane+2NG, ... on one GPU
-    local i=$1 dev=${DEVS[$1]} log="logs/${TAG}_gpu$1.log" k label ckpt flags
+    local i=$1 dev=${DEVS[$1]} log="logs/sweep/${TAG}_gpu$1.log" k label ckpt flags
     for ((k = i; k < ${#CONFIGS[@]}; k += NG)); do
         IFS='|' read -r label ckpt flags <<< "${CONFIGS[$k]}"
         echo "######## [gpu $dev] $label  $(date)" >> "$log"
@@ -71,4 +71,4 @@ lane() {   # lane <lane index>: runs configurations lane, lane+NG, lane+2NG, ...
 for ((i = 0; i < NG; i++)); do lane $i & done
 wait
 echo "End $(date)"
-grep -q "FAILED" "logs/${TAG}.out" 2>/dev/null && exit 1 || exit 0
+grep -q "FAILED" "logs/sweep/${TAG}.out" 2>/dev/null && exit 1 || exit 0

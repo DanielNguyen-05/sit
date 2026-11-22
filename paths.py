@@ -5,7 +5,7 @@ Every default folder of the project, in one place, relative to this repository.
     <repo>/fid_ref/         FID reference statistics, Inception weights, SD-VAE decoder
     <repo>/results/<exp>/   checkpoints/, fid/, fid_budget/, log.txt of each run
     <repo>/results/figures/ paper figures (tools/plot_*.py)
-    <repo>/logs/            Slurm stdout / stderr
+    <repo>/logs/            Slurm stdout / stderr: train/ fid/ sweep/ analysis/ bench/ prepare/
     <repo>/pretrained_models/  released SiT weights (only for sample.py without --ckpt)
 
 Each one can be moved elsewhere with an environment variable (SIT_DATA, SIT_FID_REF,

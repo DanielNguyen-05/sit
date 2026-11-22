@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=fid
 #SBATCH --partition=batch
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/fid/%x_%j.out
+#SBATCH --error=logs/fid/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

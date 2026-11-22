@@ -36,7 +36,7 @@ Details of every change from upstream SiT: [docs/CHANGES.md](docs/CHANGES.md).
 ├── data/                 latents.npy (42GB), labels.npy
 ├── fid_ref/              VIRTUAL_imagenet256_labeled_stats.npz, torch/ (Inception), sd-vae-ft-ema/
 ├── results/<exp>/        checkpoints/, fid/, fid_budget/, log.txt     results/figures/, results/bench/
-├── logs/                 Slurm .out / .err
+├── logs/                 Slurm .out / .err, one subfolder per kind of job (logs/README.md)
 └── pretrained_models/    released SiT-XL/2 weights (only for sample.py without --ckpt)
 ```
 
@@ -82,7 +82,7 @@ FID_ARGS="--num-samples 10000 --num-queries 32" sbatch scripts/fid.sh results/ne
 # cost table, figures, tables
 sbatch --nodelist=gpu03 scripts/bench.sh
 python tools/plot_fid.py
-python tools/plot_loss.py --run "SiT-S/2=logs/base_78522.err" --run "SiT-S/2 + ours=logs/method_78588.err" --name loss_S2
+python tools/plot_loss.py --run "SiT-S/2=logs/train/base_78522.err" --run "SiT-S/2 + ours=logs/train/method_78588.err" --name loss_S2
 python tools/plot_efficiency.py
 python tools/budget_table.py
 ```

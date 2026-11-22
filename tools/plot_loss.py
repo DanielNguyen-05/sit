@@ -1,9 +1,9 @@
 """
 Training loss of two or more runs, against training steps (a) and against training time (b),
-read straight from the Slurm logs (logs/<job>.err, the "(step=...) Train Loss: ..." lines).
+read straight from the Slurm logs (logs/train/<job>.err, the "(step=...) Train Loss: ..." lines).
 
-    python tools/plot_loss.py --run "SiT-S/2=logs/base_78522.err" --run "SiT-S/2 + ours=logs/method_78588.err" --name loss_S2
-    python tools/plot_loss.py --run "SiT-B/2=logs/base_B2_79033.err" --run "SiT-B/2 + ours=logs/method_B2_79034.err" --name loss_B2
+    python tools/plot_loss.py --run "SiT-S/2=logs/train/base_78522.err" --run "SiT-S/2 + ours=logs/train/method_78588.err" --name loss_S2
+    python tools/plot_loss.py --run "SiT-B/2=logs/train/base_B2_79033.err" --run "SiT-B/2 + ours=logs/train/method_B2_79034.err" --name loss_B2
 
 The loss is logged every 100 steps and is noisy, so it is drawn as a trailing mean over --window steps.
 Training time = steps / the run's median logged it/s (steady-state GPU hours; the first epoch reads the
@@ -115,7 +115,7 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--run", action="append", help='"Label=logs/<job>.err"; first one is the baseline.')
+    p.add_argument("--run", action="append", help='"Label=logs/train/<job>.err"; first one is the baseline.')
     p.add_argument("--speed", action="append", type=float, help="Training it/s per run (default: median of its log).")
     p.add_argument("--window", type=int, default=10_000, help="Trailing-mean window in steps.")
     p.add_argument("--start", type=int, default=10_000, help="First step drawn (the first steps are far above the rest).")

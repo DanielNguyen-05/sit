@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=encode
 #SBATCH --partition=batch
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/prepare/%x_%j.out
+#SBATCH --error=logs/prepare/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12

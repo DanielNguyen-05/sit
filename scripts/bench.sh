@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=bench
 #SBATCH --partition=batch
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/bench/%x_%j.out
+#SBATCH --error=logs/bench/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -17,7 +17,7 @@
 #   sbatch --nodelist=gpu02 scripts/bench.sh                     # the node the B/2 baseline runs on
 #   sbatch --exclude=gpu04 scripts/bench.sh --models SiT-XL/2 --batch-size 32
 #
-# Result: logs/bench_<jobid>.out (table) and results/bench/<node>_<jobid>.json
+# Result: logs/bench/bench_<jobid>.out (table) and results/bench/<node>_<jobid>.json
 set -eo pipefail
 
 _r=${SIT_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}; [ -f "$_r/scripts/env.sh" ] || _r="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

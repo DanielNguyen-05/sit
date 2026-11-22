@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=budget_loss
 #SBATCH --partition=batch
-#SBATCH --output=logs/%x_%j.out
-#SBATCH --error=logs/%x_%j.err
+#SBATCH --output=logs/analysis/%x_%j.out
+#SBATCH --error=logs/analysis/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -18,7 +18,7 @@
 #       results/nested_time/checkpoints/0400000.pt results/method/checkpoints/0400000.pt \
 #       results/baseline/checkpoints/0400000.pt
 #
-# Result: table in logs/budget_loss_<jobid>.out, JSON per checkpoint in results/<exp>/budget_loss/,
+# Result: table in logs/analysis/budget_loss_<jobid>.out, JSON per checkpoint in results/<exp>/budget_loss/,
 # results/figures/budget_loss.csv / .png / .pdf
 set -eo pipefail
 

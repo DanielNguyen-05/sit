@@ -39,7 +39,7 @@ REF_STATS="$SIT_FID_REF/VIRTUAL_imagenet256_labeled_stats.npz"
 VAE_DIR="$SIT_FID_REF/sd-vae-ft-ema"
 export TORCH_HOME="$SIT_FID_REF/torch"     # Inception weights for FID (~/.cache on the server gets cleaned)
 
-mkdir -p "$SIT_LOGS"
+mkdir -p "$SIT_LOGS"/{train,fid,sweep,analysis,bench,prepare}   # #SBATCH --output needs them to exist
 
 # ---------------------------------------------------------------- helpers
 activate_env() {

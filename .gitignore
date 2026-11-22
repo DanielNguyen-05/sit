@@ -4,8 +4,11 @@
 /results/
 /pretrained_models/
 /samples/
-/logs/*
-!/logs/.gitkeep
+/logs/**
+!/logs/
+!/logs/*/
+!/logs/**/.gitkeep
+!/logs/README.md
 wandb/
 *.pt
 *.npy
